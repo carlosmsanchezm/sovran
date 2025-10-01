@@ -10,9 +10,17 @@ fi
 REH_DIR="/reh"
 mkdir -p "$REH_DIR/bin/current" "$REH_DIR/workspace"
 
+# Detect architecture
+ARCH="$(uname -m)"
+if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+  ARCH_SUFFIX="arm64"
+else
+  ARCH_SUFFIX="x64"
+fi
+
 RELEASE_JSON_URL="https://api.github.com/repos/VSCodium/vscodium/releases/latest"
 TAG="$(curl -sL ${RELEASE_JSON_URL} | jq -r .tag_name)"
-PKG="vscodium-reh-linux-x64-${TAG}.tar.gz"
+PKG="vscodium-reh-linux-${ARCH_SUFFIX}-${TAG}.tar.gz"
 URL="https://github.com/VSCodium/vscodium/releases/download/${TAG}/${PKG}"
 
 echo "Downloading REH ${PKG} (tag ${TAG})..."
