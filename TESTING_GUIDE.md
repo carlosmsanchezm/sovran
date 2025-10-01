@@ -39,8 +39,10 @@ This is crucial for version compatibility between the extension and the Remote E
 
 **In Terminal 1:**
 ```bash
-docker run --rm --name aegis-ws -e VSCODE_COMMIT=0f0d87fa9e96c856c5212fc86db137ac0d783365 -p 11111:11111 aegis-workspace-mock
+docker run --rm --name aegis-ws --platform linux/arm64 -e VSCODE_COMMIT=0f0d87fa9e96c856c5212fc86db137ac0d783365 -p 11111:11111 aegis-workspace-mock
 ```
+
+**Note:** The `--platform linux/arm64` flag is required for Apple Silicon Macs.
 
 **Expected Output:**
 - The container will download VSCodium REH
