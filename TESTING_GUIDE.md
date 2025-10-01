@@ -23,14 +23,14 @@ The following have been completed:
 
 This is crucial for version compatibility between the extension and the Remote Extension Host.
 
-**Your VS Code commit hash is:**
+**Your VS Code Insiders commit hash is:**
 ```
-0f0d87fa9e96c856c5212fc86db137ac0d783365
+9f2fcb675abc6f6de54c325ac7ec42d0a42b8326
 ```
 
 (If you need to check again, run:)
 ```bash
-/Applications/Visual\ Studio\ Code.app/Contents/Resources/app/bin/code --version | sed -n '2p'
+"/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code" --version | sed -n '2p'
 ```
 
 ---
@@ -39,7 +39,7 @@ This is crucial for version compatibility between the extension and the Remote E
 
 **In Terminal 1:**
 ```bash
-docker run --rm --name aegis-ws --platform linux/arm64 -e VSCODE_COMMIT=0f0d87fa9e96c856c5212fc86db137ac0d783365 -p 11111:11111 aegis-workspace-mock
+docker run --rm --name aegis-ws --platform linux/arm64 -e VSCODE_COMMIT=9f2fcb675abc6f6de54c325ac7ec42d0a42b8326 -p 11111:11111 aegis-workspace-mock
 ```
 
 **Note:** The `--platform linux/arm64` flag is required for Apple Silicon Macs.

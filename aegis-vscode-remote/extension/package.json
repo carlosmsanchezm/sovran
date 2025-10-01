@@ -3,57 +3,109 @@
   "displayName": "Aegis Remote (MVP)",
   "publisher": "aegis",
   "version": "0.0.1",
-  "engines": {
-    "vscode": "^1.99.0"
-  },
-  "enabledApiProposals": [
-    "resolvers",
-    "tunnels"
-  ],
-  "scripts": {
-    "watch": "tsc -watch -p .",
-    "compile": "tsc -p ."
-  },
+  "extensionKind": ["ui"],
+  "engines": { "vscode": "^1.99.0" },
+  "enabledApiProposals": ["resolvers", "tunnels"],
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:aegis.connect",
     "onCommand:aegis.disconnect",
     "onCommand:aegis.showLogs",
-    "onView:aegis.workspaces"
+    "onCommand:aegis.reconnect",
+    "onCommand:aegis.showDiagnostics",
+    "onView:aegis.workspaces",
+    "onResolveRemoteAuthority:aegis"
   ],
   "main": "./out/extension.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch"
+  },
   "contributes": {
     "commands": [
-      {
-        "command": "aegis.connect",
-        "title": "Aegis: Connect"
-      },
-      {
-        "command": "aegis.disconnect",
-        "title": "Aegis: Disconnect"
-      },
-      {
-        "command": "aegis.showLogs",
-        "title": "Aegis: Show Logs"
-      }
+      { "command": "aegis.connect", "title": "Aegis: Connect" },
+      { "command": "aegis.disconnect", "title": "Aegis: Disconnect" },
+      { "command": "aegis.showLogs", "title": "Aegis: Show Logs" },
+      { "command": "aegis.reconnect", "title": "Aegis: Reconnect" },
+      { "command": "aegis.showDiagnostics", "title": "Aegis: Show Diagnostics" },
+      { "command": "aegis.refreshWorkspaces", "title": "Aegis: Refresh Workspaces" },
+      { "command": "aegis.signIn", "title": "Aegis: Sign In" },
+      { "command": "aegis.signOut", "title": "Aegis: Sign Out" }
     ],
     "views": {
-      "explorer": [
-        {
-          "id": "aegis.workspaces",
-          "name": "Aegis Workspaces"
+      "explorer": [{ "id": "aegis.workspaces", "name": "Aegis Workspaces" }]
+    },
+    "configuration": {
+      "title": "Aegis Remote",
+      "properties": {
+        "aegisRemote.platform.grpcEndpoint": {
+          "type": "string",
+          "default": "",
+          "description": "Host:port for the Aegis Platform gRPC endpoint (e.g. platform.aegis.example.com:443)."
+        },
+        "aegisRemote.platform.namespace": {
+          "type": "string",
+          "default": "default",
+          "description": "Logical namespace or environment hint passed to Platform APIs (optional)."
+        },
+        "aegisRemote.platform.authScope": {
+          "type": "string",
+          "default": "aegis-platform",
+          "description": "Authentication scope/audience requested for Platform access tokens."
+        },
+        "aegisRemote.defaultWorkspaceId": {
+          "type": "string",
+          "default": "",
+          "description": "Fallback workspace identifier when none is provided (optional)."
+        },
+        "aegisRemote.heartbeatIntervalMs": {
+          "type": "number",
+          "default": 15000,
+          "minimum": 1000,
+          "description": "Interval in milliseconds for WebSocket keepalive pings."
+        },
+        "aegisRemote.idleTimeoutMs": {
+          "type": "number",
+          "default": 45000,
+          "minimum": 1000,
+          "description": "Terminate connections that have been idle (no inbound bytes) for this long."
+        },
+        "aegisRemote.security.rejectUnauthorized": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reject servers whose certificates cannot be validated against the provided CA bundle."
+        },
+        "aegisRemote.security.mtlsSource": {
+          "type": "string",
+          "default": "platform",
+          "enum": ["platform", "system"],
+          "description": "Where to source client mTLS material: from Platform-issued tickets or local system store."
+        },
+        "aegisRemote.security.caPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to an additional CA bundle to trust when connecting to the proxy (optional)."
+        },
+        "aegisRemote.logLevel": {
+          "type": "string",
+          "default": "info",
+          "enum": ["info", "debug", "trace"],
+          "description": "Verbosity of client logs emitted to the output channel."
         }
-      ]
+      }
     }
   },
   "dependencies": {
+    "@grpc/grpc-js": "^1.10.6",
+    "@grpc/proto-loader": "^0.7.13",
     "ws": "^8.17.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
-    "@types/vscode": "^1.104.0",
+    "@types/vscode": "^1.99.0",
     "@types/ws": "^8.5.10",
-    "@vscode/dts": "^0.4.0",
+    "typescript": "^5.4.0",
     "@vscode/vsce": "^2.24.0",
-    "typescript": "^5.4.0"
+    "@vscode/dts": "^0.4.0"
   }
 }
