@@ -1,0 +1,59 @@
+{
+  "name": "aegis-remote",
+  "displayName": "Aegis Remote (MVP)",
+  "publisher": "aegis",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "enabledApiProposals": [
+    "resolvers",
+    "tunnels"
+  ],
+  "scripts": {
+    "watch": "tsc -watch -p .",
+    "compile": "tsc -p ."
+  },
+  "activationEvents": [
+    "onCommand:aegis.connect",
+    "onCommand:aegis.disconnect",
+    "onCommand:aegis.showLogs",
+    "onView:aegis.workspaces"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aegis.connect",
+        "title": "Aegis: Connect"
+      },
+      {
+        "command": "aegis.disconnect",
+        "title": "Aegis: Disconnect"
+      },
+      {
+        "command": "aegis.showLogs",
+        "title": "Aegis: Show Logs"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "aegis.workspaces",
+          "name": "Aegis Workspaces"
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "ws": "^8.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/vscode": "^1.104.0",
+    "@types/ws": "^8.5.10",
+    "@vscode/dts": "^0.4.0",
+    "@vscode/vsce": "^2.24.0",
+    "typescript": "^5.4.0"
+  }
+}
