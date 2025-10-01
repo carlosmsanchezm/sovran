@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "gen-cert": "openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout cert.key -out cert.crt -subj \"/CN=localhost\""
+    "gen-cert": "openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout cert.key -out cert.crt -subj \"/CN=localhost\"",
+    "drop": "curl -ks https://127.0.0.1:7001/admin/close"
   },
   "dependencies": {
     "ws": "^8.17.0"

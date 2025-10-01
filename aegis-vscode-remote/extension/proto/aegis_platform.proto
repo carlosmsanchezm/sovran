@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package aegis.platform.v1;
+
+option go_package = "github.com/aegis/platform/proto";
+
+message Workspace {
+  string id = 1;
+  string name = 2;
+  string cluster = 3;
+  string dns = 4;
+}
+
+message ListWorkspacesRequest {}
+
+message ListWorkspacesResponse {
+  repeated Workspace workspaces = 1;
+}
+
+service Workspaces {
+  rpc ListForUser(ListWorkspacesRequest) returns (ListWorkspacesResponse);
+}
+
+message IssueProxyTicketRequest {
+  string wid = 1;
+}
+
+message IssueProxyTicketResponse {
+  string proxy_url = 1;
+  string jwt = 2;
+  int64 ttl_seconds = 3;
+  string ca_pem = 4;
+  string cert_pem = 5;
+  string key_pem = 6;
+  string server_name = 7;
+  string jti = 8;
+  string dest = 9;
+  repeated string dns = 10;
+  repeated string groups = 11;
+}
+
+service Sessions {
+  rpc IssueProxyTicket(IssueProxyTicketRequest) returns (IssueProxyTicketResponse);
+}
