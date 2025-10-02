@@ -1,0 +1,39 @@
+# macOS & editor cruft
+.DS_Store
+.AppleDouble
+.LSOverride
+.vscode/
+.idea/
+
+# VS Code local data directories used for testing the extension
+.vscode-aegis-data/
+.vscode-aegis-ext/
+
+# Node / TypeScript build outputs
+node_modules/
+**/node_modules/
+**/out/
+**/dist/
+**/coverage/
+
+# VS Code packaged extensions
+*.vsix
+
+# Logs & temp artifacts
+logs/
+*.log
+*.tmp
+tmp/
+*.tar
+*.tar.gz
+
+# Docker / container tooling
+.docker/
+
+# Runtime tokens or generated files inside workspace mock
+workspace-mock/reh/
+
+# Python caches (if helper scripts are added later)
+__pycache__/
+*.pyc
+

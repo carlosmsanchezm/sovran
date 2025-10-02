@@ -1,44 +1,184 @@
 syntax = "proto3";
+package aegis.v1;
+option go_package = "github.com/yourorg/aegis/proto/aegis/v1;aegisv1";
 
-package aegis.platform.v1;
+import "google/protobuf/empty.proto";
 
-option go_package = "github.com/aegis/platform/proto";
+// ---- Core resource messages ----
+message Project { string id = 1; string display_name = 2; string owner_group = 3; PolicyDomain policy = 4; }
+message PolicyDomain { repeated string regions = 1; string data_level = 2; bool deny_egress_by_default = 3; }
 
-message Workspace {
+message Budget {
+  string project_id = 1;
+  string queue = 2;
+  double limit_usd = 3;
+  string policy_mode = 4;
+}
+
+message Flavor {
+  string name = 1;
+  string chip = 2;
+  string mig_profile = 3;
+  bool rdma_required = 4;
+  string resource_name = 5;
+  int32 gpu_count = 6;
+  double memory_gib = 7;
+  double price_usd_per_gpu_hour = 8;
+  string cpu_cores_request = 9;
+  string memory_request = 10;
+}
+
+message Queue {
+  string name = 1; string project_id = 2; string priority_tier = 3;
+  repeated string allowed_flavors = 4;
+  int64 default_max_duration_seconds = 5;
+}
+
+// Workload
+message WorkspaceSpec {
+  string flavor = 1;
+  string image = 2;
+  map<string,string> env = 3;
+  repeated string command = 4;
+  int64 max_duration_seconds = 5;
+  bool interactive = 6;
+  repeated int32 ports = 7;
+}
+message TrainingSpec  { string flavor = 1; int32 workers = 2; int32 gpus_per_worker = 3; string image = 4; repeated string command = 5; bool gang = 6; int64 max_duration_seconds = 7; }
+
+message ResourceHints {
+  string resource_name = 1;
+  int32 gpu_count = 2;
+  string cpu_cores_request = 3;
+  string memory_request = 4;
+}
+
+message Workload {
+  string id = 1; string project_id = 2; string queue = 3; string cluster_id = 4; string status = 5; string url = 6;
+  oneof kind { WorkspaceSpec workspace = 10; TrainingSpec training = 11; }
+  ResourceHints hints = 12;
+  string ui_status = 13;
+  string message = 14;
+}
+
+message GetWorkspaceConnectionDetailsRequest {
   string id = 1;
-  string name = 2;
-  string cluster = 3;
-  string dns = 4;
 }
 
-message ListWorkspacesRequest {}
-
-message ListWorkspacesResponse {
-  repeated Workspace workspaces = 1;
-}
-
-service Workspaces {
-  rpc ListForUser(ListWorkspacesRequest) returns (ListWorkspacesResponse);
-}
-
-message IssueProxyTicketRequest {
-  string wid = 1;
-}
-
-message IssueProxyTicketResponse {
+message GetWorkspaceConnectionDetailsResponse {
   string proxy_url = 1;
-  string jwt = 2;
-  int64 ttl_seconds = 3;
-  string ca_pem = 4;
-  string cert_pem = 5;
-  string key_pem = 6;
-  string server_name = 7;
-  string jti = 8;
-  string dest = 9;
-  repeated string dns = 10;
-  repeated string groups = 11;
+  string token = 2;
+  string ssh_host_alias = 3;
+  string ssh_username = 4;
+  string internal_host = 5;
+  int32 dest_port = 6;
+  string expires_at_utc = 7;
 }
 
-service Sessions {
-  rpc IssueProxyTicket(IssueProxyTicketRequest) returns (IssueProxyTicketResponse);
+message CreateConnectionSessionRequest {
+  string workload_id = 1;
+  string client = 2;
+}
+
+message ConnectionSession {
+  string session_id = 1;
+  string token = 2;
+  string ssh_user = 3;
+  string ssh_host_alias = 4;
+  string vscode_uri = 5;
+  string ssh_config = 6;
+  string proxy_url = 7;
+  string expires_at_utc = 8;
+  bool one_time = 9;
+}
+
+message RenewConnectionSessionRequest {
+  string session_id = 1;
+}
+
+message RevokeConnectionSessionRequest {
+  string session_id = 1;
+}
+
+message ClusterRegisterRequest { string cluster_id = 1; string provider = 2; string region = 3; string il_level = 4; map<string,string> labels = 5; }
+message ClusterRegisterResponse { bool ok = 1; string message = 2; }
+message ClusterHeartbeat { string cluster_id = 1; double ttf_gpu_seconds_p50 = 2; repeated Flavor available_flavors = 3; }
+message ClusterHeartbeatAck { bool ok = 1; }
+
+message CreateProjectRequest { Project project = 1; }
+message UpsertBudgetRequest { Budget budget = 1; }
+message UpsertFlavorRequest { Flavor flavor = 1; }
+message UpsertQueueRequest  { Queue queue = 1; }
+message SubmitWorkloadRequest { Workload workload = 1; }
+message GetWorkloadRequest { string id = 1; }
+message ListWorkloadsRequest { string project_id = 1; }
+message ListWorkloadsResponse { repeated Workload items = 1; }
+
+message LeaseWorkloadRequest {
+  string cluster_id = 1;
+  int32 max = 2;
+}
+
+message LeaseWorkloadResponse {
+  repeated Workload items = 1;
+}
+
+message AckWorkloadRequest {
+  string id = 1;
+  string status = 2;
+  string url = 3;
+  string backend = 4;
+}
+
+message AckWorkloadResponse {
+  Workload workload = 1;
+}
+
+message StartWorkloadRequest {
+  string id = 1;
+  string cluster_id = 2;
+}
+
+message StartWorkloadResponse {
+  Workload workload = 1;
+}
+
+message GetBudgetRequest { string project_id = 1; string queue = 2; }
+message BudgetUsage {
+  double actual_usd = 1;
+  double reserved_usd = 2;
+  double remaining_usd = 3;
+  string period_start_utc = 4;
+  string period_end_utc = 5;
+}
+message GetBudgetResponse { Budget budget = 1; BudgetUsage usage = 2; }
+
+message ListBudgetsRequest { string project_id = 1; }
+message BudgetWithUsage { Budget budget = 1; BudgetUsage usage = 2; }
+message ListBudgetsResponse { repeated BudgetWithUsage items = 1; }
+
+service AegisPlatform {
+  rpc CreateProject(CreateProjectRequest) returns (Project);
+  rpc UpsertBudget(UpsertBudgetRequest) returns (Budget);
+  rpc GetBudget(GetBudgetRequest) returns (GetBudgetResponse);
+  rpc ListBudgets(ListBudgetsRequest) returns (ListBudgetsResponse);
+  rpc UpsertFlavor(UpsertFlavorRequest) returns (Flavor);
+  rpc UpsertQueue(UpsertQueueRequest) returns (Queue);
+
+  rpc SubmitWorkload(SubmitWorkloadRequest) returns (Workload);
+  rpc GetWorkload(GetWorkloadRequest) returns (Workload);
+  rpc ListWorkloads(ListWorkloadsRequest) returns (ListWorkloadsResponse);
+
+  rpc GetWorkspaceConnectionDetails(GetWorkspaceConnectionDetailsRequest) returns (GetWorkspaceConnectionDetailsResponse);
+
+  rpc CreateConnectionSession(CreateConnectionSessionRequest) returns (ConnectionSession);
+  rpc RenewConnectionSession(RenewConnectionSessionRequest) returns (ConnectionSession);
+  rpc RevokeConnectionSession(RevokeConnectionSessionRequest) returns (google.protobuf.Empty);
+
+  rpc LeaseWorkload(LeaseWorkloadRequest) returns (LeaseWorkloadResponse);
+  rpc StartWorkload(StartWorkloadRequest) returns (StartWorkloadResponse);
+  rpc AckWorkload(AckWorkloadRequest) returns (AckWorkloadResponse);
+
+  rpc RegisterCluster(ClusterRegisterRequest) returns (ClusterRegisterResponse);
+  rpc Heartbeat(ClusterHeartbeat) returns (ClusterHeartbeatAck);
 }

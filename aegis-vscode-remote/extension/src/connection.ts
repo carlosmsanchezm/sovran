@@ -24,9 +24,16 @@ export interface ConnMetrics {
 export interface ConnectionOptions {
   heartbeatIntervalMs: number;
   idleTimeoutMs: number;
-  tlsInsecure: boolean;
   logLevel: LogLevel;
   log: (message: string) => void;
+  headers?: Record<string, string>;
+  tls?: {
+    ca?: string | Buffer | Array<string | Buffer>;
+    cert?: string | Buffer;
+    key?: string | Buffer;
+    servername?: string;
+  };
+  rejectUnauthorized?: boolean;
 }
 
 export class ConnectionManager {
@@ -50,11 +57,37 @@ export class ConnectionManager {
     this.startAt = Date.now();
 
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.url, {
+      const wsOptions: WebSocket.ClientOptions = {
         perMessageDeflate: false,
-        rejectUnauthorized: !this.opts.tlsInsecure,
-      });
+        rejectUnauthorized: this.opts.rejectUnauthorized !== false,
+        headers: this.opts.headers,
+        ca: this.opts.tls?.ca,
+        cert: this.opts.tls?.cert,
+        key: this.opts.tls?.key,
+      };
+      if (this.opts.tls?.servername) {
+        (wsOptions as Record<string, unknown>).servername = this.opts.tls.servername;
+      }
+      const ws = new WebSocket(this.url, wsOptions);
       ws.binaryType = 'arraybuffer';
+
+      ws.on('unexpected-response', (_req, res) => {
+        const status = res.statusCode ?? 0;
+        this.opts.log(`[conn] unexpected response status=${status}`);
+        let body = '';
+        res.on('data', (chunk) => {
+          if (body.length > 4096) {
+            return;
+          }
+          body += chunk instanceof Buffer ? chunk.toString('utf8') : String(chunk);
+        });
+        res.on('end', () => {
+          if (body) {
+            const snippet = body.length > 4096 ? `${body.slice(0, 4096)}…` : body;
+            this.opts.log(`[conn] unexpected response body=${snippet}`);
+          }
+        });
+      });
 
       const clearTimers = () => {
         if (this.hb) {
@@ -156,7 +189,8 @@ export class ConnectionManager {
       ws.on('error', (err) => {
         const error = err instanceof Error ? err : new Error(String(err));
         this.metrics.lastError = error.message;
-        this.opts.log(`[conn] error ${error.message}`);
+        const summary = error?.message ? `${error.message}` : String(error ?? 'unknown error');
+        this.opts.log(`[conn] error ${summary}`);
         if (ws.readyState === WebSocket.CONNECTING) {
           clearTimers();
           reject(error);

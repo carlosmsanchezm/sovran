@@ -35,6 +35,13 @@
     "views": {
       "explorer": [{ "id": "aegis.workspaces", "name": "Aegis Workspaces" }]
     },
+    "authentication": [
+      {
+        "label": "Aegis Platform",
+        "id": "aegis",
+        "supportsMultipleAccounts": false
+      }
+    ],
     "configuration": {
       "title": "Aegis Remote",
       "properties": {
@@ -52,6 +59,11 @@
           "type": "string",
           "default": "aegis-platform",
           "description": "Authentication scope/audience requested for Platform access tokens."
+        },
+        "aegisRemote.platform.projectId": {
+          "type": "string",
+          "default": "",
+          "description": "Project identifier whose interactive workspaces should be listed."
         },
         "aegisRemote.defaultWorkspaceId": {
           "type": "string",

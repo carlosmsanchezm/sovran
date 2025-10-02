@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { getSettings } from './config';
 import { ConnectionManager } from './connection';
 import { out } from './ui';
+import { getLastProxyTicketSummary } from './platform';
 
 export function registerDiagnostics(ctx: vscode.ExtensionContext, getConnection: () => ConnectionManager | undefined) {
   ctx.subscriptions.push(
@@ -15,6 +16,11 @@ export function registerDiagnostics(ctx: vscode.ExtensionContext, getConnection:
         out.appendLine('[diag] metrics=' + JSON.stringify(metrics));
       } else {
         out.appendLine('[diag] metrics=unavailable (no active connection)');
+      }
+      const ticket = getLastProxyTicketSummary();
+      if (ticket) {
+        const redacted = { ...ticket, jti: ticket.jti ? ticket.jti.slice(0, 8) + '…' : undefined };
+        out.appendLine('[diag] ticket=' + JSON.stringify(redacted));
       }
       vscode.window.showInformationMessage('Aegis diagnostics sent to output channel.');
     })

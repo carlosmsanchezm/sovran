@@ -37,6 +37,7 @@ exports.registerDiagnostics = registerDiagnostics;
 const vscode = __importStar(require("vscode"));
 const config_1 = require("./config");
 const ui_1 = require("./ui");
+const platform_1 = require("./platform");
 function registerDiagnostics(ctx, getConnection) {
     ctx.subscriptions.push(vscode.commands.registerCommand('aegis.showDiagnostics', () => {
         const settings = (0, config_1.getSettings)();
@@ -48,6 +49,11 @@ function registerDiagnostics(ctx, getConnection) {
         }
         else {
             ui_1.out.appendLine('[diag] metrics=unavailable (no active connection)');
+        }
+        const ticket = (0, platform_1.getLastProxyTicketSummary)();
+        if (ticket) {
+            const redacted = { ...ticket, jti: ticket.jti ? ticket.jti.slice(0, 8) + '…' : undefined };
+            ui_1.out.appendLine('[diag] ticket=' + JSON.stringify(redacted));
         }
         vscode.window.showInformationMessage('Aegis diagnostics sent to output channel.');
     }));

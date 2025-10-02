@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { listWorkspaces, WorkspaceSummary } from './platform';
 
 export const out = vscode.window.createOutputChannel('Aegis Remote');
 
@@ -8,14 +9,117 @@ export class Status {
 }
 export const status = new Status();
 
+class WorkspaceTreeItem extends vscode.TreeItem {
+  constructor(public readonly workspace: WorkspaceSummary) {
+    super(workspace.name ?? workspace.id, vscode.TreeItemCollapsibleState.None);
+    this.contextValue = 'workspace';
+    const descriptionParts: string[] = [];
+    if (workspace.cluster) descriptionParts.push(workspace.cluster);
+    if (workspace.dns) descriptionParts.push(workspace.dns);
+    this.description = descriptionParts.join(' · ') || undefined;
+    this.command = {
+      command: 'aegis.connect',
+      title: 'Connect',
+      arguments: [workspace.id],
+    };
+  }
+}
+
 export class WorkspacesProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
-  private onDidChange = new vscode.EventEmitter<void>();
-  onDidChangeTreeData = this.onDidChange.event;
-  refresh() { this.onDidChange.fire(); }
-  getTreeItem(e: vscode.TreeItem) { return e; }
-  getChildren(): vscode.ProviderResult<vscode.TreeItem[]> {
-    return [
-      new vscode.TreeItem('w-1234', vscode.TreeItemCollapsibleState.None)
-    ].map(i => { i.contextValue = 'workspace'; i.command = { command: 'aegis.connect', title: 'Connect', arguments: ['w-1234'] }; return i; });
+  private readonly onDidChangeEmitter = new vscode.EventEmitter<void>();
+  readonly onDidChangeTreeData = this.onDidChangeEmitter.event;
+
+  private loading = false;
+  private loadedOnce = false;
+  private lastError: unknown;
+  private items: vscode.TreeItem[] = [];
+
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
+  dispose() {
+    this.onDidChangeEmitter.dispose();
+  }
+
+  refresh() {
+    this.loadedOnce = false;
+    this.onDidChangeEmitter.fire();
+  }
+
+  getTreeItem(element: vscode.TreeItem): vscode.TreeItem | Thenable<vscode.TreeItem> {
+    return element;
+  }
+
+  async getChildren(): Promise<vscode.TreeItem[]> {
+    if (this.loading) {
+      return [this.createInfoItem('Loading workspaces…')];
+    }
+    if (!this.loadedOnce) {
+      await this.load();
+    }
+    if (this.items.length > 0) {
+      return this.items;
+    }
+    if (this.lastError) {
+      return [this.createErrorItem(this.lastError)];
+    }
+    return [this.createInfoItem('No workspaces available')];
+  }
+
+  private async load() {
+    this.loading = true;
+    this.onDidChangeEmitter.fire();
+    try {
+      const workspaces = await listWorkspaces();
+      this.items = workspaces.map((ws) => new WorkspaceTreeItem(ws));
+      this.lastError = undefined;
+    } catch (err) {
+      this.lastError = err;
+      this.items = [];
+      out.appendLine(`[ui] failed to load workspaces: ${String(err)}`);
+    } finally {
+      this.loading = false;
+      this.loadedOnce = true;
+      this.onDidChangeEmitter.fire();
+    }
+  }
+
+  private createInfoItem(text: string): vscode.TreeItem {
+    const item = new vscode.TreeItem(text, vscode.TreeItemCollapsibleState.None);
+    item.contextValue = 'info';
+    item.iconPath = new vscode.ThemeIcon('info');
+    return item;
+  }
+
+  private createErrorItem(error: unknown): vscode.TreeItem {
+    const message = this.describeError(error);
+    if (message === 'Aegis sign-in required.') {
+      const item = new vscode.TreeItem('Sign in to Aegis…', vscode.TreeItemCollapsibleState.None);
+      item.contextValue = 'auth';
+      item.iconPath = new vscode.ThemeIcon('key');
+      item.command = { command: 'aegis.signIn', title: 'Sign In' };
+      return item;
+    }
+    if (/Configure/.test(message)) {
+      const item = new vscode.TreeItem(message, vscode.TreeItemCollapsibleState.None);
+      item.contextValue = 'settings';
+      item.iconPath = new vscode.ThemeIcon('gear');
+      item.command = {
+        command: 'workbench.action.openSettings',
+        title: 'Open Settings',
+        arguments: ['aegisRemote.platform.grpcEndpoint'],
+      };
+      return item;
+    }
+    const item = new vscode.TreeItem(message, vscode.TreeItemCollapsibleState.None);
+    item.contextValue = 'error';
+    item.iconPath = new vscode.ThemeIcon('error');
+    return item;
+  }
+
+  private describeError(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return typeof error === 'string' ? error : 'Unable to load workspaces';
   }
 }

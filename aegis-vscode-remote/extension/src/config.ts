@@ -2,23 +2,45 @@ import * as vscode from 'vscode';
 
 export type LogLevel = 'info' | 'debug' | 'trace';
 
+export interface SecuritySettings {
+  rejectUnauthorized: boolean;
+  mtlsSource: 'platform' | 'system';
+  caPath?: string;
+}
+
+export interface PlatformSettings {
+  grpcEndpoint: string;
+  namespace: string;
+  authScope: string;
+  projectId: string;
+}
+
 export interface AegisSettings {
-  proxyUrl: string;
-  defaultWorkspaceId: string;
+  platform: PlatformSettings;
+  defaultWorkspaceId?: string;
   heartbeatIntervalMs: number;
   idleTimeoutMs: number;
-  tlsInsecure: boolean;
+  security: SecuritySettings;
   logLevel: LogLevel;
 }
 
 export function getSettings(): AegisSettings {
   const cfg = vscode.workspace.getConfiguration('aegisRemote');
   return {
-    proxyUrl: cfg.get('proxyUrl', 'wss://127.0.0.1:7001/tunnel'),
-    defaultWorkspaceId: cfg.get('defaultWorkspaceId', 'w-1234'),
+    platform: {
+      grpcEndpoint: cfg.get('platform.grpcEndpoint', ''),
+      namespace: cfg.get('platform.namespace', 'default'),
+      authScope: cfg.get('platform.authScope', 'aegis-platform'),
+      projectId: cfg.get('platform.projectId', ''),
+    },
+    defaultWorkspaceId: cfg.get('defaultWorkspaceId', ''),
     heartbeatIntervalMs: cfg.get('heartbeatIntervalMs', 15_000),
     idleTimeoutMs: cfg.get('idleTimeoutMs', 45_000),
-    tlsInsecure: cfg.get('tls.insecure', true),
+    security: {
+      rejectUnauthorized: cfg.get('security.rejectUnauthorized', true),
+      mtlsSource: cfg.get('security.mtlsSource', 'platform'),
+      caPath: cfg.get('security.caPath', ''),
+    },
     logLevel: cfg.get('logLevel', 'info'),
   };
 }
