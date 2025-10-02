@@ -53,6 +53,26 @@ async function activate(ctx) {
     const provider = new ui_1.WorkspacesProvider(ctx);
     const treeView = vscode.window.createTreeView('aegis.workspaces', { treeDataProvider: provider });
     ctx.subscriptions.push(provider, treeView);
+    // Handle external URIs from browser (vscode://aegis.aegis-remote/aegis+<workload-id>)
+    ctx.subscriptions.push(vscode.window.registerUriHandler({
+        handleUri: async (uri) => {
+            ui_1.out.appendLine(`[uri-handler] received URI: ${uri.toString()}`);
+            // Extract workspace ID from URI path (format: /aegis+w-xxxxx)
+            const match = uri.path.match(/^\/aegis\+(.+)$/);
+            if (match) {
+                const workspaceId = match[1];
+                ui_1.out.appendLine(`[uri-handler] connecting to workspace: ${workspaceId}`);
+                // Ensure user is signed in
+                await (0, auth_1.requireSession)(true);
+                // Open the workspace in a new window
+                const remoteUri = vscode.Uri.parse(`vscode-remote://aegis+${workspaceId}/home/project`);
+                await vscode.commands.executeCommand('vscode.openFolder', remoteUri, { forceNewWindow: true });
+            }
+            else {
+                ui_1.out.appendLine(`[uri-handler] unrecognized URI format: ${uri.path}`);
+            }
+        }
+    }));
     ctx.subscriptions.push((0, config_1.onDidChangeSettings)(async () => {
         const cfg = (0, config_1.getSettings)();
         ui_1.out.appendLine('[settings] updated ' + JSON.stringify(cfg));
