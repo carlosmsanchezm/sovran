@@ -44,18 +44,28 @@ COMMIT_URL="https://vscode.download.prss.microsoft.com/dbazure/download/${QUALIT
 API_URL="${BASE_URL}/commit/${COMMIT}/server-linux-${ARCH_SUFFIX}/${QUALITY}"
 LATEST_URL="${BASE_URL}/latest/server-linux-${ARCH_SUFFIX}/${QUALITY}"
 
-echo "Downloading VS Code server commit ${COMMIT} (${QUALITY}, ${ARCH_SUFFIX})..."
-if ! curl -fsSL "$COMMIT_URL" -o "$TMP_TAR"; then
-  if ! curl -fsSL "$API_URL" -o "$TMP_TAR"; then
-    echo "Falling back to latest ${QUALITY} server for ${ARCH_SUFFIX}."
-    curl -fsSL "$LATEST_URL" -o "$TMP_TAR"
-  fi
+MARK_FILE="${REH_DIR}/bin/current/.commit"
+CURRENT_MARK=""
+if [ -f "$MARK_FILE" ]; then
+  CURRENT_MARK="$(cat "$MARK_FILE" 2>/dev/null || true)"
 fi
 
-rm -rf "$REH_DIR/bin/current"
-mkdir -p "$REH_DIR/bin/current"
-tar -xzf "$TMP_TAR" -C "$REH_DIR/bin/current" --strip-components=1
-rm "$TMP_TAR"
+if [ "$CURRENT_MARK" != "$COMMIT" ]; then
+  echo "Downloading VS Code server commit ${COMMIT} (${QUALITY}, ${ARCH_SUFFIX})..."
+  if ! curl -fsSL "$COMMIT_URL" -o "$TMP_TAR"; then
+    if ! curl -fsSL "$API_URL" -o "$TMP_TAR"; then
+      echo "Falling back to latest ${QUALITY} server for ${ARCH_SUFFIX}."
+      curl -fsSL "$LATEST_URL" -o "$TMP_TAR"
+    fi
+  fi
+
+  rm -rf "$REH_DIR/bin/current"
+  mkdir -p "$REH_DIR/bin/current"
+  tar -xzf "$TMP_TAR" -C "$REH_DIR/bin/current" --strip-components=1
+  printf '%s' "$COMMIT" > "$MARK_FILE"
+fi
+
+rm -f "$TMP_TAR"
 
 echo "hello" > "${REH_DIR}/token"
 

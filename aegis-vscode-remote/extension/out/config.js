@@ -39,11 +39,20 @@ const vscode = __importStar(require("vscode"));
 function getSettings() {
     const cfg = vscode.workspace.getConfiguration('aegisRemote');
     return {
-        proxyUrl: cfg.get('proxyUrl', 'wss://127.0.0.1:7001/tunnel'),
-        defaultWorkspaceId: cfg.get('defaultWorkspaceId', 'w-1234'),
+        platform: {
+            grpcEndpoint: cfg.get('platform.grpcEndpoint', ''),
+            namespace: cfg.get('platform.namespace', 'default'),
+            authScope: cfg.get('platform.authScope', 'aegis-platform'),
+            projectId: cfg.get('platform.projectId', ''),
+        },
+        defaultWorkspaceId: cfg.get('defaultWorkspaceId', ''),
         heartbeatIntervalMs: cfg.get('heartbeatIntervalMs', 15_000),
         idleTimeoutMs: cfg.get('idleTimeoutMs', 45_000),
-        tlsInsecure: cfg.get('tls.insecure', true),
+        security: {
+            rejectUnauthorized: cfg.get('security.rejectUnauthorized', true),
+            mtlsSource: cfg.get('security.mtlsSource', 'platform'),
+            caPath: cfg.get('security.caPath', ''),
+        },
         logLevel: cfg.get('logLevel', 'info'),
     };
 }
