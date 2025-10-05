@@ -35,51 +35,53 @@ export const AegisResolver: vscode.RemoteAuthorityResolver = {
       throw new Error('Workspace id not provided.');
     }
 
-    const ticket = await issueProxyTicket(wid);
-    const url = buildWebSocketUrl(ticket.proxyUrl, wid);
-
-    out.appendLine(`[resolver] resolve(${authority}) attempt=${context.resolveAttempt} url=${url}`);
+    out.appendLine(`[resolver] resolve(${authority}) attempt=${context.resolveAttempt}`);
     const widLabel = `workspace ${wid}`;
-    status.set(`$(sync~spin) Aegis: Connecting ${widLabel}…`, url);
-
-    const caBuffers: Buffer[] = [];
-    if (ticket.caPem) {
-      caBuffers.push(Buffer.from(ticket.caPem));
-    }
-    if (settings.security.caPath) {
-      try {
-        const fileCa = await fs.readFile(settings.security.caPath);
-        caBuffers.push(fileCa);
-      } catch (err) {
-        out.appendLine(`[resolver] failed to read CA bundle: ${String(err)}`);
-      }
-    }
-
-    const tlsOptions = {
-      ca: caBuffers.length === 0 ? undefined : caBuffers.length === 1 ? caBuffers[0] : caBuffers,
-      cert: ticket.certPem ? Buffer.from(ticket.certPem) : undefined,
-      key: ticket.keyPem ? Buffer.from(ticket.keyPem) : undefined,
-      servername: ticket.serverName,
-    };
+    status.set(`$(sync~spin) Aegis: Connecting ${widLabel}…`);
 
     if (renewalTimer) {
       clearTimeout(renewalTimer);
       renewalTimer = undefined;
     }
 
-    const connection = new ConnectionManager(url, {
-      heartbeatIntervalMs: settings.heartbeatIntervalMs,
-      idleTimeoutMs: settings.idleTimeoutMs,
-      logLevel: settings.logLevel,
-      log: (message) => out.appendLine(message),
-      headers: { Authorization: `Bearer ${ticket.jwt}` },
-      tls: tlsOptions,
-      rejectUnauthorized: settings.security.rejectUnauthorized,
-    });
-    lastConnection = connection;
-
     const managed = new vscode.ManagedResolvedAuthority(async () => {
       try {
+        // Get a fresh ticket for each connection attempt (tokens are one-time use)
+        const ticket = await issueProxyTicket(wid);
+        const url = buildWebSocketUrl(ticket.proxyUrl, wid);
+        out.appendLine(`[resolver] got ticket for ${wid}, url=${url}`);
+
+        const caBuffers: Buffer[] = [];
+        if (ticket.caPem) {
+          caBuffers.push(Buffer.from(ticket.caPem));
+        }
+        if (settings.security.caPath) {
+          try {
+            const fileCa = await fs.readFile(settings.security.caPath);
+            caBuffers.push(fileCa);
+          } catch (err) {
+            out.appendLine(`[resolver] failed to read CA bundle: ${String(err)}`);
+          }
+        }
+
+        const tlsOptions = {
+          ca: caBuffers.length === 0 ? undefined : caBuffers.length === 1 ? caBuffers[0] : caBuffers,
+          cert: ticket.certPem ? Buffer.from(ticket.certPem) : undefined,
+          key: ticket.keyPem ? Buffer.from(ticket.keyPem) : undefined,
+          servername: ticket.serverName,
+        };
+
+        const connection = new ConnectionManager(url, {
+          heartbeatIntervalMs: settings.heartbeatIntervalMs,
+          idleTimeoutMs: settings.idleTimeoutMs,
+          logLevel: settings.logLevel,
+          log: (message) => out.appendLine(message),
+          headers: { Authorization: `Bearer ${ticket.jwt}` },
+          tls: tlsOptions,
+          rejectUnauthorized: settings.security.rejectUnauthorized,
+        });
+        lastConnection = connection;
+
         const transport = await connection.open();
         status.set(`$(plug) Aegis: Connected ${widLabel}`, url);
         transport.onDidClose(() => status.set(`$(debug-disconnect) Aegis: Disconnected ${widLabel}`, url));
