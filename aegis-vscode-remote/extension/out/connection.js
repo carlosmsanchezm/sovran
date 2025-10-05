@@ -178,6 +178,10 @@ class ConnectionManager {
                 this.lastRxAt = Date.now();
                 this.metrics.lastMessageAt = this.lastRxAt;
                 this.metrics.bytesRx += buf.length;
+                if (this.opts.logLevel === 'trace') {
+                    const preview = buf.length > 64 ? `${buf.slice(0, 64).toString('hex')}…` : buf.toString('hex');
+                    this.debug(`[conn] rx ${buf.length}b ${preview}`);
+                }
                 onRx.fire(buf);
             });
             ws.on('close', (code, reason) => {

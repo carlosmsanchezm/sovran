@@ -109,7 +109,7 @@ class PlatformClient {
     const settings = getSettings();
     this.settings = settings;
 
-    const endpoint = settings.platform.grpcEndpoint;
+    const endpoint = this.normalizeEndpoint(settings.platform.grpcEndpoint);
     if (!endpoint) {
       this.disposeClients();
       return;
@@ -128,7 +128,7 @@ class PlatformClient {
       throw new Error('Failed to load platform proto definitions.');
     }
 
-    const tlsCreds = await this.buildChannelCredentials(settings);
+    const tlsCreds = await this.buildChannelCredentials(endpoint, settings);
     const clientOptions: grpc.ClientOptions = {
       'grpc.max_receive_message_length': 10 * 1024 * 1024,
     };
@@ -140,14 +140,19 @@ class PlatformClient {
     this.client = new serviceDef(endpoint, tlsCreds, clientOptions) as PlatformClientGrpc;
   }
 
-  private async buildChannelCredentials(settings: AegisSettings): Promise<grpc.ChannelCredentials> {
-    const endpoint = settings.platform.grpcEndpoint.trim();
+  private async buildChannelCredentials(endpoint: string, settings: AegisSettings): Promise<grpc.ChannelCredentials> {
+    const { security } = settings;
+
     if (endpoint.startsWith('localhost') || endpoint.startsWith('127.0.0.1') || endpoint.startsWith('[::1]')) {
       out.appendLine('[platform] creating insecure gRPC client for local development');
       return grpc.credentials.createInsecure();
     }
 
-    const { security } = settings;
+    if (security.rejectUnauthorized === false) {
+      out.appendLine('[platform] creating insecure gRPC client (TLS verification disabled by settings)');
+      return grpc.credentials.createInsecure();
+    }
+
     let ca: Buffer | undefined;
     if (security.caPath) {
       try {
@@ -161,9 +166,25 @@ class PlatformClient {
   }
 
   private ensureSettingsPresent() {
-    if (!this.settings?.platform.grpcEndpoint) {
+    const endpoint = this.normalizeEndpoint(this.settings?.platform.grpcEndpoint ?? '');
+    if (!endpoint) {
       throw new Error('Configure "aegisRemote.platform.grpcEndpoint" in settings.');
     }
+  }
+
+  private normalizeEndpoint(raw: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    if (trimmed.endsWith('[')) {
+      const sanitized = trimmed.slice(0, -1);
+      out.appendLine(`[platform] normalized gRPC endpoint from "${trimmed}" to "${sanitized}"`);
+      return sanitized;
+    }
+
+    return trimmed;
   }
 
   async listWorkspaces(): Promise<WorkspaceSummary[]> {

@@ -68,46 +68,48 @@ exports.AegisResolver = {
         if (!wid) {
             throw new Error('Workspace id not provided.');
         }
-        const ticket = await (0, platform_1.issueProxyTicket)(wid);
-        const url = buildWebSocketUrl(ticket.proxyUrl, wid);
-        ui_1.out.appendLine(`[resolver] resolve(${authority}) attempt=${context.resolveAttempt} url=${url}`);
+        ui_1.out.appendLine(`[resolver] resolve(${authority}) attempt=${context.resolveAttempt}`);
         const widLabel = `workspace ${wid}`;
-        ui_1.status.set(`$(sync~spin) Aegis: Connecting ${widLabel}…`, url);
-        const caBuffers = [];
-        if (ticket.caPem) {
-            caBuffers.push(Buffer.from(ticket.caPem));
-        }
-        if (settings.security.caPath) {
-            try {
-                const fileCa = await fs_1.promises.readFile(settings.security.caPath);
-                caBuffers.push(fileCa);
-            }
-            catch (err) {
-                ui_1.out.appendLine(`[resolver] failed to read CA bundle: ${String(err)}`);
-            }
-        }
-        const tlsOptions = {
-            ca: caBuffers.length === 0 ? undefined : caBuffers.length === 1 ? caBuffers[0] : caBuffers,
-            cert: ticket.certPem ? Buffer.from(ticket.certPem) : undefined,
-            key: ticket.keyPem ? Buffer.from(ticket.keyPem) : undefined,
-            servername: ticket.serverName,
-        };
+        ui_1.status.set(`$(sync~spin) Aegis: Connecting ${widLabel}…`);
         if (renewalTimer) {
             clearTimeout(renewalTimer);
             renewalTimer = undefined;
         }
-        const connection = new connection_1.ConnectionManager(url, {
-            heartbeatIntervalMs: settings.heartbeatIntervalMs,
-            idleTimeoutMs: settings.idleTimeoutMs,
-            logLevel: settings.logLevel,
-            log: (message) => ui_1.out.appendLine(message),
-            headers: { Authorization: `Bearer ${ticket.jwt}` },
-            tls: tlsOptions,
-            rejectUnauthorized: settings.security.rejectUnauthorized,
-        });
-        lastConnection = connection;
         const managed = new vscode.ManagedResolvedAuthority(async () => {
             try {
+                // Get a fresh ticket for each connection attempt (tokens are one-time use)
+                const ticket = await (0, platform_1.issueProxyTicket)(wid);
+                const url = buildWebSocketUrl(ticket.proxyUrl, wid);
+                ui_1.out.appendLine(`[resolver] got ticket for ${wid}, url=${url}`);
+                const caBuffers = [];
+                if (ticket.caPem) {
+                    caBuffers.push(Buffer.from(ticket.caPem));
+                }
+                if (settings.security.caPath) {
+                    try {
+                        const fileCa = await fs_1.promises.readFile(settings.security.caPath);
+                        caBuffers.push(fileCa);
+                    }
+                    catch (err) {
+                        ui_1.out.appendLine(`[resolver] failed to read CA bundle: ${String(err)}`);
+                    }
+                }
+                const tlsOptions = {
+                    ca: caBuffers.length === 0 ? undefined : caBuffers.length === 1 ? caBuffers[0] : caBuffers,
+                    cert: ticket.certPem ? Buffer.from(ticket.certPem) : undefined,
+                    key: ticket.keyPem ? Buffer.from(ticket.keyPem) : undefined,
+                    servername: ticket.serverName,
+                };
+                const connection = new connection_1.ConnectionManager(url, {
+                    heartbeatIntervalMs: settings.heartbeatIntervalMs,
+                    idleTimeoutMs: settings.idleTimeoutMs,
+                    logLevel: settings.logLevel,
+                    log: (message) => ui_1.out.appendLine(message),
+                    headers: { Authorization: `Bearer ${ticket.jwt}` },
+                    tls: tlsOptions,
+                    rejectUnauthorized: settings.security.rejectUnauthorized,
+                });
+                lastConnection = connection;
                 const transport = await connection.open();
                 ui_1.status.set(`$(plug) Aegis: Connected ${widLabel}`, url);
                 transport.onDidClose(() => ui_1.status.set(`$(debug-disconnect) Aegis: Disconnected ${widLabel}`, url));
