@@ -26,6 +26,7 @@ logs/
 tmp/
 *.tar
 *.tar.gz
+repo_dump.txt
 
 # Docker / container tooling
 .docker/
@@ -37,3 +38,5 @@ workspace-mock/reh/
 __pycache__/
 *.pyc
 
+# Symbolic links
+code-insiders
