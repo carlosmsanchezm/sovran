@@ -4,11 +4,25 @@
     "outDir": "./out-e2e",
     "baseUrl": "./src",
     "paths": {
-      "./platform": ["./__tests__/stubs/platform.e2e.stub"],
-      "./ui": ["./__tests__/stubs/ui.e2e.stub"],
-      "./config": ["./__tests__/stubs/config.e2e.stub"],
-      "./diagnostics": ["./__tests__/stubs/diagnostics.stub"]
+      "./platform": [
+        "./__tests__/stubs/platform.e2e.stub"
+      ],
+      "./ui": [
+        "./__tests__/stubs/ui.e2e.stub"
+      ],
+      "./config": [
+        "./__tests__/stubs/config.e2e.stub"
+      ],
+      "./diagnostics": [
+        "./__tests__/stubs/diagnostics.stub"
+      ]
     }
   },
-  "include": ["src/**/*", "__tests__/e2e/**/*"]
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "src/__tests__/**",
+    "__tests__/test-results/**"
+  ]
 }
