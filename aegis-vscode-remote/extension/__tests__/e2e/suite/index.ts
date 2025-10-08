@@ -15,7 +15,7 @@ async function waitFor(condition: () => boolean, timeoutMs: number) {
 suite('Aegis E2E', function () {
   this.timeout(60000);
 
-  test('connect via command and URI handler', async () => {
+  test('resolver connects over proxy and updates status', async () => {
     const extension = vscode.extensions.getExtension('aegis.aegis-remote');
     assert.ok(extension, 'extension should be available');
     if (!extension!.isActive) {
@@ -27,9 +27,12 @@ suite('Aegis E2E', function () {
 
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { status } = require(path.join(bundleDir!, 'ui.js'));
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { AegisResolver } = require(path.join(bundleDir!, 'resolver.js'));
 
     let connected = false;
     let disconnected = false;
+    let receivedEcho = false;
     const statusDisposable = status.onDidChange?.((event: any) => {
       const text = String(event?.text ?? '');
       if (text.includes('Connected')) {
@@ -40,23 +43,18 @@ suite('Aegis E2E', function () {
       }
     });
 
-    const originalShowInputBox = vscode.window.showInputBox;
-    const prompts = ['dev@example.com', 'token-e2e'];
-    (vscode.window.showInputBox as any) = async () => prompts.shift() ?? 'token-e2e';
-
     try {
-      await vscode.commands.executeCommand('aegis.connect', 'w-e2e');
+      const result = await AegisResolver.resolve('aegis+w-e2e', { resolveAttempt: 1 } as any);
+      const transport = await result.opener();
       await waitFor(() => connected, 15000);
-
-      const uri = vscode.Uri.parse('vscode://aegis.aegis-remote/aegis+w-e2e');
-      await vscode.env.openExternal(uri);
-
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      await vscode.commands.executeCommand('aegis.disconnect');
-
+      transport.onDidReceiveMessage(() => {
+        receivedEcho = true;
+      });
+      transport.send(new Uint8Array([1, 2, 3]));
+      await waitFor(() => receivedEcho, 5000);
+      transport.end();
       await waitFor(() => disconnected, 10000);
     } finally {
-      (vscode.window.showInputBox as any) = originalShowInputBox;
       statusDisposable?.dispose?.();
     }
   });
