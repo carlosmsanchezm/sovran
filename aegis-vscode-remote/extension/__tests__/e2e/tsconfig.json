@@ -8,7 +8,14 @@
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
-    "moduleResolution": "node"
+    "moduleResolution": "node",
+    "baseUrl": "../src",
+    "paths": {
+      "./platform": ["../src/__tests__/stubs/platform.e2e.stub"],
+      "./ui": ["../src/__tests__/stubs/ui.e2e.stub"],
+      "./config": ["../src/__tests__/stubs/config.e2e.stub"],
+      "./diagnostics": ["../src/__tests__/stubs/diagnostics.stub"]
+    }
   },
   "include": ["suite/**/*"]
 }
