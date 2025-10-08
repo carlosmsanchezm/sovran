@@ -1,0 +1,20 @@
+{
+  "name": "aegis-vscode-remote-repo",
+  "private": true,
+  "workspaces": [
+    "aegis-vscode-remote/extension",
+    "aegis-vscode-remote/proxy"
+  ],
+  "scripts": {
+    "build": "npm run -w aegis-remote build && npm run -w aegis-wss-proxy build",
+    "test": "node ./scripts/test/run-all.js",
+    "lint": "echo \"(optional)\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "cross-env": "^7.0.3",
+    "npm-run-all": "^4.1.5",
+    "tsx": "^4.19.0",
+    "wait-on": "^7.2.0"
+  }
+}

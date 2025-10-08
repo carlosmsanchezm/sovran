@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./out-e2e",
+    "baseUrl": "./src",
+    "paths": {
+      "./platform": ["./__tests__/stubs/platform.e2e.stub"],
+      "./ui": ["./__tests__/stubs/ui.e2e.stub"],
+      "./config": ["./__tests__/stubs/config.e2e.stub"],
+      "./diagnostics": ["./__tests__/stubs/diagnostics.stub"]
+    }
+  },
+  "include": ["src/**/*"]
+}

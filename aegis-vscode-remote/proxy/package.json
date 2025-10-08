@@ -7,7 +7,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "gen-cert": "openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout cert.key -out cert.crt -subj \"/CN=localhost\"",
-    "drop": "curl -ks https://127.0.0.1:7001/admin/close"
+    "drop": "curl -ks https://127.0.0.1:7001/admin/close",
+    "start:test": "npm run build && npm run gen-cert && node dist/server.js"
   },
   "dependencies": {
     "ws": "^8.17.0"
@@ -15,6 +16,7 @@
   "devDependencies": {
     "@types/node": "^20.11.30",
     "@types/ws": "^8.18.1",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "portfinder": "^1.0.32"
   }
 }

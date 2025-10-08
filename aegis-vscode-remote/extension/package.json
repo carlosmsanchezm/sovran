@@ -3,9 +3,16 @@
   "displayName": "Aegis Remote (MVP)",
   "publisher": "aegis",
   "version": "0.0.1",
-  "extensionKind": ["ui"],
-  "engines": { "vscode": "^1.99.0" },
-  "enabledApiProposals": ["resolvers", "tunnels"],
+  "extensionKind": [
+    "ui"
+  ],
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "enabledApiProposals": [
+    "resolvers",
+    "tunnels"
+  ],
   "activationEvents": [
     "onStartupFinished",
     "onCommand:aegis.connect",
@@ -19,21 +26,54 @@
   "main": "./out/extension.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "watch": "tsc -p tsconfig.json --watch"
+    "watch": "tsc -p tsconfig.json --watch",
+    "test:unit": "jest -c jest.config.js --runInBand",
+    "test:integration": "jest -c jest.config.js --runInBand --testPathPattern=__tests__/integration",
+    "test:e2e": "node ./__tests__/e2e/run-vscode-tests.js",
+    "build:test-e2e": "tsc -p tsconfig.e2e.json"
   },
   "contributes": {
     "commands": [
-      { "command": "aegis.connect", "title": "Aegis: Connect" },
-      { "command": "aegis.disconnect", "title": "Aegis: Disconnect" },
-      { "command": "aegis.showLogs", "title": "Aegis: Show Logs" },
-      { "command": "aegis.reconnect", "title": "Aegis: Reconnect" },
-      { "command": "aegis.showDiagnostics", "title": "Aegis: Show Diagnostics" },
-      { "command": "aegis.refreshWorkspaces", "title": "Aegis: Refresh Workspaces" },
-      { "command": "aegis.signIn", "title": "Aegis: Sign In" },
-      { "command": "aegis.signOut", "title": "Aegis: Sign Out" }
+      {
+        "command": "aegis.connect",
+        "title": "Aegis: Connect"
+      },
+      {
+        "command": "aegis.disconnect",
+        "title": "Aegis: Disconnect"
+      },
+      {
+        "command": "aegis.showLogs",
+        "title": "Aegis: Show Logs"
+      },
+      {
+        "command": "aegis.reconnect",
+        "title": "Aegis: Reconnect"
+      },
+      {
+        "command": "aegis.showDiagnostics",
+        "title": "Aegis: Show Diagnostics"
+      },
+      {
+        "command": "aegis.refreshWorkspaces",
+        "title": "Aegis: Refresh Workspaces"
+      },
+      {
+        "command": "aegis.signIn",
+        "title": "Aegis: Sign In"
+      },
+      {
+        "command": "aegis.signOut",
+        "title": "Aegis: Sign Out"
+      }
     ],
     "views": {
-      "explorer": [{ "id": "aegis.workspaces", "name": "Aegis Workspaces" }]
+      "explorer": [
+        {
+          "id": "aegis.workspaces",
+          "name": "Aegis Workspaces"
+        }
+      ]
     },
     "authentication": [
       {
@@ -90,7 +130,10 @@
         "aegisRemote.security.mtlsSource": {
           "type": "string",
           "default": "platform",
-          "enum": ["platform", "system"],
+          "enum": [
+            "platform",
+            "system"
+          ],
           "description": "Where to source client mTLS material: from Platform-issued tickets or local system store."
         },
         "aegisRemote.security.caPath": {
@@ -101,7 +144,11 @@
         "aegisRemote.logLevel": {
           "type": "string",
           "default": "info",
-          "enum": ["info", "debug", "trace"],
+          "enum": [
+            "info",
+            "debug",
+            "trace"
+          ],
           "description": "Verbosity of client logs emitted to the output channel."
         }
       }
@@ -118,6 +165,20 @@
     "@types/ws": "^8.5.10",
     "typescript": "^5.4.0",
     "@vscode/vsce": "^2.24.0",
-    "@vscode/dts": "^0.4.0"
+    "@vscode/dts": "^0.4.0",
+    "@types/jest": "^29.5.12",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "jest-environment-node": "^29.7.0",
+    "rewire": "^6.0.0",
+    "@vscode/test-electron": "^2.3.9",
+    "mocha": "^10.7.3",
+    "@types/mocha": "^10.0.6",
+    "http-proxy": "^1.18.1",
+    "execa": "^9.3.0",
+    "portfinder": "^1.0.32",
+    "get-port": "^7.1.0",
+    "rimraf": "^6.0.1",
+    "tmp": "^0.2.3"
   }
 }
