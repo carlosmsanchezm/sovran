@@ -40,3 +40,7 @@ __pycache__/
 
 # Symbolic links
 code-insiders
+
+aegis-vscode-remote/extension/.vscode-test/
+aegis-vscode-remote/extension/__tests__/logs-real/
+aegis-vscode-remote/extension/__tests__/.user-data-real/
