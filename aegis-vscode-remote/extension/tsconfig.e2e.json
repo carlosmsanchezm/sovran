@@ -10,5 +10,5 @@
       "./diagnostics": ["./__tests__/stubs/diagnostics.stub"]
     }
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*", "__tests__/e2e/**/*"]
 }
