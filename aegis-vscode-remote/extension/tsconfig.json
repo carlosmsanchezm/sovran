@@ -10,5 +10,9 @@
     "esModuleInterop": true,
     "moduleResolution": "node",
     "types": ["node", "jest"]
-  }
+  },
+  "exclude": [
+    "__tests__/e2e",
+    "test-results"
+  ]
 }
