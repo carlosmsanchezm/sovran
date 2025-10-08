@@ -101,14 +101,14 @@ jobs:
         run: |
           echo "## Test Summary" >> $GITHUB_STEP_SUMMARY
           node <<'NODE' >> $GITHUB_STEP_SUMMARY
-const fs = require('fs');
-const path = './aegis-vscode-remote/extension/coverage/coverage-summary.json';
-if (fs.existsSync(path)) {
-  const summary = require(path).total;
-  console.log(`Lines: ${summary.lines.pct}%  |  Stmts: ${summary.statements.pct}%  |  Branches: ${summary.branches.pct}%  |  Funcs: ${summary.functions.pct}%`);
-} else {
-  console.log('Coverage summary not found.');
-}
+          const fs = require('fs');
+          const path = './aegis-vscode-remote/extension/coverage/coverage-summary.json';
+          if (fs.existsSync(path)) {
+            const summary = require(path).total;
+            console.log(`Lines: ${summary.lines.pct}%  |  Stmts: ${summary.statements.pct}%  |  Branches: ${summary.branches.pct}%  |  Funcs: ${summary.functions.pct}%`);
+          } else {
+            console.log('Coverage summary not found.');
+          }
 NODE
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- :open_file_folder: **Artifacts:** coverage, jest JUnit, e2e JUnit uploaded." >> $GITHUB_STEP_SUMMARY
