@@ -101,15 +101,15 @@ jobs:
         run: |
           echo "## Test Summary" >> $GITHUB_STEP_SUMMARY
           node <<'NODE' >> $GITHUB_STEP_SUMMARY
-          const fs = require('fs');
-          const summaryPath = './aegis-vscode-remote/extension/coverage/coverage-summary.json';
-          if (fs.existsSync(summaryPath)) {
-            const summary = require(summaryPath).total;
-            console.log(`Lines: ${summary.lines.pct}%  |  Stmts: ${summary.statements.pct}%  |  Branches: ${summary.branches.pct}%  |  Funcs: ${summary.functions.pct}%`);
-          } else {
-            console.log('Coverage summary not found.');
-          }
-NODE
+            const fs = require('fs');
+            const summaryPath = './aegis-vscode-remote/extension/coverage/coverage-summary.json';
+            if (fs.existsSync(summaryPath)) {
+              const summary = require(summaryPath).total;
+              console.log(`Lines: ${summary.lines.pct}%  |  Stmts: ${summary.statements.pct}%  |  Branches: ${summary.branches.pct}%  |  Funcs: ${summary.functions.pct}%`);
+            } else {
+              console.log('Coverage summary not found.');
+            }
+          NODE
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- :open_file_folder: **Artifacts:** coverage, jest JUnit, e2e JUnit uploaded." >> $GITHUB_STEP_SUMMARY
           echo "- :robot: Agents can fetch artifacts via the GitHub API (names: 'coverage-and-jest-results', 'e2e-junit')." >> $GITHUB_STEP_SUMMARY
