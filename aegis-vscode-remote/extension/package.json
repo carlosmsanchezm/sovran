@@ -179,6 +179,9 @@
     "portfinder": "^1.0.32",
     "get-port": "^7.1.0",
     "rimraf": "^6.0.1",
-    "tmp": "^0.2.3"
+    "tmp": "^0.2.3",
+    "jest-junit": "^16.0.0",
+    "mocha-junit-reporter": "^2.2.0",
+    "@types/rewire": "^2.5.28"
   }
 }

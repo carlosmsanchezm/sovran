@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="jest-tests" tests="1" failures="0" errors="0" time="0.6">
+  <testsuite name="resolver ↔ proxy integration" errors="0" failures="0" skipped="0" timestamp="2025-10-08T05:03:57" time="0.502" tests="1">
+    <testcase classname="resolver ↔ proxy integration establishes transport over proxy and echoes bytes" name="resolver ↔ proxy integration establishes transport over proxy and echoes bytes" time="0.072">
+    </testcase>
+  </testsuite>
+</testsuites>

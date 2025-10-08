@@ -100,4 +100,38 @@ describe('auth module', () => {
     const removal = sessionEvents.find((evt: any) => Array.isArray(evt.removed) && evt.removed.length === 1);
     expect(removal).toBeTruthy();
   });
+
+  test('getSessions hydrates from secrets with default label when subject missing', async () => {
+    const { auth, vscode } = await loadModules();
+    const ctx = createContext();
+
+    await ctx.secrets.store(SECRET_TOKEN_KEY, 'stored-token');
+    await auth.initializeAuth(ctx);
+
+    const provider = (vscode.authentication.registerAuthenticationProvider as jest.Mock).mock.calls[0][2] as any;
+    const sessions = await provider.getSessions([], {});
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].accessToken).toBe('stored-token');
+    expect(sessions[0].account.label).toBe('Aegis User');
+  });
+
+  test('createSession throws cancellation error when subject or token missing', async () => {
+    const { auth, vscode } = await loadModules();
+    const ctx = createContext();
+
+    await auth.initializeAuth(ctx);
+    const provider = (vscode.authentication.registerAuthenticationProvider as jest.Mock).mock.calls[0][2] as any;
+
+    const showInputBoxMock = vscode.window.showInputBox as jest.MockedFunction<typeof vscode.window.showInputBox>;
+
+    // Subject cancelled
+    showInputBoxMock.mockResolvedValueOnce(undefined as any);
+    await expect(provider.createSession(['platform'], {})).rejects.toBeInstanceOf(vscode.CancellationError);
+
+    // Subject provided, token cancelled
+    showInputBoxMock.mockResolvedValueOnce('user@example.com');
+    showInputBoxMock.mockResolvedValueOnce(undefined as any);
+    await expect(provider.createSession(['platform'], {})).rejects.toBeInstanceOf(vscode.CancellationError);
+  });
 });
