@@ -30,6 +30,8 @@ suite('Aegis E2E', function () {
 
     try {
       const result = await AegisResolver.resolve('aegis+w-e2e', { resolveAttempt: 1 } as any);
+      console.log('resolver result keys', Object.keys(result));
+      console.log('resolver result', result);
       const transport = await result.opener();
       let receivedEcho = false;
       let closed = false;
