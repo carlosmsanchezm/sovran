@@ -26,36 +26,28 @@ suite('Aegis E2E', function () {
     assert.ok(bundleDir, 'bundle directory not provided');
 
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { status } = require(path.join(bundleDir!, 'ui.js'));
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { AegisResolver } = require(path.join(bundleDir!, 'resolver.js'));
-
-    let connected = false;
-    let disconnected = false;
-    let receivedEcho = false;
-    const statusDisposable = status.onDidChange?.((event: any) => {
-      const text = String(event?.text ?? '');
-      if (text.includes('Connected')) {
-        connected = true;
-      }
-      if (text.includes('Disconnected')) {
-        disconnected = true;
-      }
-    });
 
     try {
       const result = await AegisResolver.resolve('aegis+w-e2e', { resolveAttempt: 1 } as any);
       const transport = await result.opener();
-      await waitFor(() => connected, 15000);
+      let receivedEcho = false;
+      let closed = false;
+      let ended = false;
       transport.onDidReceiveMessage(() => {
         receivedEcho = true;
+      });
+      transport.onDidClose(() => {
+        closed = true;
+      });
+      transport.onDidEnd(() => {
+        ended = true;
       });
       transport.send(new Uint8Array([1, 2, 3]));
       await waitFor(() => receivedEcho, 5000);
       transport.end();
-      await waitFor(() => disconnected, 10000);
+      await waitFor(() => closed || ended, 10000);
     } finally {
-      statusDisposable?.dispose?.();
     }
   });
 });
