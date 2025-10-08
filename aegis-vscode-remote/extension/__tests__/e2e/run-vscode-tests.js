@@ -1,9 +1,12 @@
 const path = require('path');
+const fs = require('fs');
 const { runTests } = require('@vscode/test-electron');
 
 async function main() {
   const extensionDevelopmentPath = path.resolve(__dirname, '../../');
-  const extensionTestsPath = path.resolve(__dirname, './suite/run');
+  const compiledTestsPath = path.resolve(extensionDevelopmentPath, 'out-e2e/__tests__/e2e/suite/run.js');
+  const sourceTestsPath = path.resolve(__dirname, './suite/run');
+  const extensionTestsPath = fs.existsSync(compiledTestsPath) ? compiledTestsPath : sourceTestsPath;
   const launchArgs = [
     '--disable-extensions',
     '--user-data-dir=' + path.join(__dirname, '.user-data'),
