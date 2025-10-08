@@ -12,6 +12,7 @@ const compiledTestsPath = path.resolve(extensionDevelopmentPath, 'out-e2e/suite/
     '--user-data-dir=' + path.join(__dirname, '.user-data'),
     '--skip-welcome',
     '--skip-release-notes',
+    '--enable-proposed-api=aegis.aegis-remote',
   ];
   
   process.env.AEGIS_TEST_PROXY_URL = process.env.AEGIS_TEST_PROXY_URL || 'https://127.0.0.1:7443';
