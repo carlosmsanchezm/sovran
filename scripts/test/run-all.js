@@ -9,7 +9,6 @@ async function main() {
   let proxy;
   let bridge;
   try {
-    proxy = await startProxy();
     bridge = await startBridge({ listenPort: 7443, targetPort: 7001 });
 
     const extCwd = path.resolve('aegis-vscode-remote/extension');

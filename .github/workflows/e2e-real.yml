@@ -1,0 +1,105 @@
+name: VS Code Real Backend E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      grpc_address:
+        description: "Platform gRPC endpoint (host:port)"
+        required: true
+      workspace_id:
+        description: "Workspace ID to exercise"
+        required: true
+      namespace:
+        description: "Platform namespace"
+        required: false
+        default: "default"
+      project_id:
+        description: "Optional project ID"
+        required: false
+        default: ""
+      ca_bundle_base64:
+        description: "Optional base64-encoded PEM CA bundle"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  real-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_GRPC_ADDR: ${{ inputs.grpc_address }}
+      AEGIS_PLATFORM_NAMESPACE: ${{ inputs.namespace }}
+      AEGIS_PROJECT_ID: ${{ inputs.project_id }}
+      AEGIS_WORKSPACE_ID: ${{ inputs.workspace_id }}
+      AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
+      AEGIS_TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libnss3 libxkbfile1 libsecret-1-0 libasound2 \
+            libgtk-3-0 libxshmfence1 libx11-xcb1 libgbm1 xvfb
+
+      - name: Cache VS Code download
+        uses: actions/cache@v4
+        with:
+          path: ~/.vscode-test
+          key: vscode-test-${{ runner.os }}-${{ hashFiles('aegis-vscode-remote/extension/package.json') }}
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --workspaces; fi
+
+      - name: Build extension
+        run: npm run -w aegis-remote build
+
+      - name: Prepare CA bundle (optional)
+        id: cabundle
+        run: |
+          if [ -n "${{ inputs.ca_bundle_base64 }}" ]; then
+            ca_path="$(pwd)/aegis-vscode-remote/extension/__tests__/e2e-real/ca.pem"
+            echo "${{ inputs.ca_bundle_base64 }}" | base64 -d > "$ca_path"
+            echo "AEGIS_CA_PEM=$ca_path" >> $GITHUB_ENV
+          fi
+
+      - name: Run real backend E2E
+        env:
+          DISPLAY: :99
+        run: |
+          cd aegis-vscode-remote/extension
+          xvfb-run -a npm run test:e2e:real
+
+      - name: Upload real E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcx-real-e2e-artifacts
+          path: |
+            aegis-vscode-remote/extension/__tests__/logs-real/**
+            aegis-vscode-remote/extension/__tests__/test-results/junit/mocha-e2e-real-results.xml
+          if-no-files-found: warn
+
+      - name: Publish JUnit summary
+        if: always()
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: |
+            aegis-vscode-remote/extension/__tests__/test-results/junit/mocha-e2e-real-results.xml
+          check_name: "VS Code REAL E2E"
+          detailed_summary: true
+          require_tests: true
