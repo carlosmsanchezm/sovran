@@ -80,7 +80,7 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Terraform init & apply
+      - name: Prepare Terraform state
         working-directory: infra/terraform
         env:
           TF_WORKSPACE: ${{ steps.ids.outputs.preview_id }}
@@ -91,8 +91,19 @@ jobs:
           TF_WS="$TF_WORKSPACE"
           unset TF_WORKSPACE
           terraform init -backend-config=backend.hcl -input=false
-          terraform workspace select "$TF_WS" || terraform workspace new "$TF_WS"
-          terraform apply -auto-approve -input=false
+          CURRENT_WS="prod"
+          if terraform workspace list | grep -q "prod"; then
+            terraform workspace select "prod"
+            CURRENT_WS="prod"
+          elif terraform workspace list | grep -q "$TF_WS"; then
+            terraform workspace select "$TF_WS"
+            CURRENT_WS="$TF_WS"
+          else
+            terraform workspace select default
+            CURRENT_WS="default"
+          fi
+          echo "Using Terraform workspace: ${CURRENT_WS}"
+          terraform state pull > terraform.tfstate
 
       - name: Deploy control plane via Helm
         working-directory: infra
