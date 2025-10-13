@@ -174,16 +174,17 @@ jobs:
           path: .tls
 
       - name: Install dependencies
+        working-directory: aegis-vscode-remote/extension
         run: npm ci
 
       - name: Build extension and E2E harness
-        run: |
-          npm run build
-          npm run build:test-e2e:real
+        working-directory: aegis-vscode-remote/extension
+        run: npm run build
 
       - name: Run VS Code cloud TLS E2E
         env:
           AEGIS_CA_PEM: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
+        working-directory: aegis-vscode-remote/extension
         run: npm run test:e2e:real
 
   teardown:
