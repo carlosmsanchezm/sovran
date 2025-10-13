@@ -37,14 +37,14 @@ jobs:
         if: env.INFRA_REPO_TOKEN != ''
         uses: actions/checkout@v4
         with:
-          repository: carlossanchez/aegis
+          repository: carlossanchezm/aegis
           path: infra
           token: ${{ env.INFRA_REPO_TOKEN }}
 
       - name: Fail if infrastructure repository token is missing
         if: env.INFRA_REPO_TOKEN == ''
         run: |
-          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlossanchez/aegis."
+          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlossanchezm/aegis."
           exit 1
 
       - name: Derive preview identifiers
@@ -168,14 +168,14 @@ jobs:
         if: env.INFRA_REPO_TOKEN != ''
         uses: actions/checkout@v4
         with:
-          repository: carlossanchez/aegis
+          repository: carlossanchezm/aegis
           path: infra
           token: ${{ env.INFRA_REPO_TOKEN }}
 
       - name: Fail if infrastructure repository token is missing
         if: env.INFRA_REPO_TOKEN == ''
         run: |
-          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlossanchez/aegis."
+          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlossanchezm/aegis."
           exit 1
 
       - name: Configure AWS credentials
