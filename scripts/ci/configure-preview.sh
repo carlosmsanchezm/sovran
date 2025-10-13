@@ -31,7 +31,7 @@ need terraform
 need dig
 
 log() {
-  printf '[configure-preview] %s\n' "$*"
+  printf '[configure-preview] %s\n' "$*" >&2
 }
 
 wait_for_lb() {
