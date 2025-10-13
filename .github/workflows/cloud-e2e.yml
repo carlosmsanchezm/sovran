@@ -56,5 +56,5 @@ jobs:
       - name: Build extension
         run: npm run build
 
-      - name: Run mock E2E suite
-        run: npm run test:e2e
+      - name: Run repository test suite
+        run: npm test
