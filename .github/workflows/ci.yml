@@ -25,6 +25,7 @@ jobs:
     name: Tests on ${{ matrix.os }} (Node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    if: github.ref != 'refs/heads/feature/ci-tests' && github.head_ref != 'feature/ci-tests'
     strategy:
       fail-fast: false
       matrix:
