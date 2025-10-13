@@ -111,7 +111,7 @@ jobs:
       AEGIS_GRPC_ADDR: ${{ needs.deploy-preview.outputs.grpc_addr }}
       AEGIS_PLATFORM_NAMESPACE: ${{ needs.deploy-preview.outputs.preview_namespace }}
       AEGIS_PROJECT_ID: ${{ format('p-ext-%s', github.run_id) }}
-      NODE_EXTRA_CA_CERTS: ${{ runner.temp }}/tls/aegis-platform-api-ca.crt
+      NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
       AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
       AEGIS_TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
     steps:
@@ -127,7 +127,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: tls-ca-bundle
-          path: ${{ runner.temp }}/tls
+          path: .tls
 
       - name: Install dependencies
         run: npm ci
@@ -139,7 +139,7 @@ jobs:
 
       - name: Run VS Code cloud TLS E2E
         env:
-          AEGIS_CA_PEM: ${{ runner.temp }}/tls/aegis-platform-api-ca.crt
+          AEGIS_CA_PEM: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
         run: npm run test:e2e:real
 
   teardown:
