@@ -103,6 +103,7 @@ jobs:
             exit 1
           fi
           echo "Using Terraform workspace: ${CURRENT_WS}"
+          terraform state pull > terraform.tfstate
 
       - name: Deploy control plane via Helm
         working-directory: infra
