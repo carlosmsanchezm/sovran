@@ -105,6 +105,7 @@ jobs:
           fi
           echo "Using Terraform workspace: ${CURRENT_WS}"
           terraform state pull > terraform.tfstate
+          echo "TF_CLI_ARGS_output=-state=$(pwd)/terraform.tfstate" >> "$GITHUB_ENV"
 
       - name: Deploy control plane via Helm
         working-directory: infra
