@@ -99,6 +99,9 @@ jobs:
           K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
           SPOKE_HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}-spoke
           SKIP_ROUTE53_UPDATE: '1'
+          PLATFORM_API_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/platform-api:v1.0.6-tls2
+          PROXY_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/proxy:no-client-cert
+          K8S_AGENT_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/k8s-agent:v1.0.2-tls-20251005-amd64
         run: |
           set -euo pipefail
           ./terraform/generate-helm-values.sh --non-interactive --tls
