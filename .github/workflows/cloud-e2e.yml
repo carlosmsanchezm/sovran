@@ -83,15 +83,24 @@ jobs:
       - name: Terraform initialize state
         working-directory: infra/terraform
         env:
-          TF_WORKSPACE: default
+          TF_WORKSPACE_PRIMARY: prod
+          TF_WORKSPACE_FALLBACK: default
         run: |
           set -euo pipefail
           export TF_IN_AUTOMATION=1
           export TF_INPUT=0
-          TF_WS="$TF_WORKSPACE"
-          unset TF_WORKSPACE
           terraform init -backend-config=backend.hcl -input=false
-          terraform workspace select "$TF_WS"
+          CURRENT_WS="${TF_WORKSPACE_PRIMARY}"
+          if terraform workspace list | grep -q "${TF_WORKSPACE_PRIMARY}"; then
+            terraform workspace select "${TF_WORKSPACE_PRIMARY}"
+          elif terraform workspace list | grep -q "${TF_WORKSPACE_FALLBACK}"; then
+            CURRENT_WS="${TF_WORKSPACE_FALLBACK}"
+            terraform workspace select "${TF_WORKSPACE_FALLBACK}"
+          else
+            echo "::error::Neither workspace ${TF_WORKSPACE_PRIMARY} nor ${TF_WORKSPACE_FALLBACK} exists in state" >&2
+            exit 1
+          fi
+          echo "Using Terraform workspace: ${CURRENT_WS}"
 
       - name: Deploy control plane via Helm
         working-directory: infra
