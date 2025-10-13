@@ -89,10 +89,19 @@ jobs:
           export TF_INPUT=0
           TF_WS="${{ steps.ids.outputs.preview_id }}"
           terraform init -backend-config=backend.hcl -input=false
+          echo "Available Terraform workspaces:" 
+          workspace_list=$(terraform workspace list | sed 's/^[* ] //')
+          for ws in $workspace_list; do
+            if [[ "$ws" == ext-* && "$ws" != "${TF_WS}" ]]; then
+              echo "Cleaning up previous preview workspace $ws"
+              terraform workspace select "$ws"
+              TF_VAR_environment="$ws" terraform destroy -auto-approve -input=false || true
+              terraform workspace select default
+              terraform workspace delete "$ws" || true
+            fi
+          done
           TF_ENV="${{ steps.ids.outputs.preview_release }}"
           echo "TF_VAR_environment=${TF_ENV}" >> "$GITHUB_ENV"
-          echo "Available Terraform workspaces:" 
-          terraform workspace list || true
           if terraform workspace list | grep -q "^  ${TF_WS}$"; then
             terraform workspace select "${TF_WS}"
           else
