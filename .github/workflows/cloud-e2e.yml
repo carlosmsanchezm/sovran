@@ -63,7 +63,8 @@ jobs:
       - name: Derive preview identifiers
         id: ids
         run: |
-          preview_id="ext-${GITHUB_RUN_ID}"
+          hash=$(echo -n "${GITHUB_RUN_ID}" | shasum | cut -c1-6)
+          preview_id="ext-${hash}"
           echo "preview_id=${preview_id}" >>"${GITHUB_OUTPUT}"
           echo "preview_namespace=${preview_id}" >>"${GITHUB_OUTPUT}"
           echo "preview_release=${preview_id}" >>"${GITHUB_OUTPUT}"
