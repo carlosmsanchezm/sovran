@@ -90,6 +90,8 @@ jobs:
           export TF_IN_AUTOMATION=1
           export TF_INPUT=0
           terraform init -backend-config=backend.hcl -input=false
+          echo "Available Terraform workspaces:" 
+          terraform workspace list
           CURRENT_WS="${TF_WORKSPACE_PRIMARY}"
           if terraform workspace list | grep -q "${TF_WORKSPACE_PRIMARY}"; then
             terraform workspace select "${TF_WORKSPACE_PRIMARY}"
