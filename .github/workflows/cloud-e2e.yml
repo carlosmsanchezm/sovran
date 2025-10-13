@@ -158,16 +158,25 @@ jobs:
     runs-on: ubuntu-latest
     needs: deploy-preview
     env:
+      INFRA_REPO_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
       PREVIEW_ID: ${{ format('ext-%s', github.run_id) }}
     steps:
       - name: Checkout extension repository
         uses: actions/checkout@v4
 
       - name: Checkout infrastructure repository
+        if: env.INFRA_REPO_TOKEN != ''
         uses: actions/checkout@v4
         with:
-          repository: carlossanchez/aegis-swarm-gpt5-upgrade
+          repository: carlossanchez/aegis
           path: infra
+          token: ${{ env.INFRA_REPO_TOKEN }}
+
+      - name: Fail if infrastructure repository token is missing
+        if: env.INFRA_REPO_TOKEN == ''
+        run: |
+          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlossanchez/aegis."
+          exit 1
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
