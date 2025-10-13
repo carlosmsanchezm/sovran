@@ -86,11 +86,13 @@ jobs:
           TF_WORKSPACE: ${{ steps.ids.outputs.preview_id }}
         run: |
           set -euo pipefail
-          terraform init -backend-config=backend.hcl
+          export TF_IN_AUTOMATION=1
+          export TF_INPUT=0
           TF_WS="$TF_WORKSPACE"
           unset TF_WORKSPACE
+          terraform init -backend-config=backend.hcl -input=false
           terraform workspace select "$TF_WS" || terraform workspace new "$TF_WS"
-          terraform apply -auto-approve
+          terraform apply -auto-approve -input=false
 
       - name: Deploy control plane via Helm
         working-directory: infra
