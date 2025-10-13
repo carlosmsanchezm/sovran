@@ -83,27 +83,29 @@ jobs:
       - name: Prepare Terraform state
         working-directory: infra/terraform
         env:
-          PRIMARY_WORKSPACE: prod
-          FALLBACK_WORKSPACE: default
+          TF_WORKSPACE: ${{ steps.ids.outputs.preview_id }}
         run: |
           set -euo pipefail
           export TF_IN_AUTOMATION=1
           export TF_INPUT=0
           terraform init -backend-config=backend.hcl -input=false
+          TF_ENV="${{ steps.ids.outputs.preview_release }}"
+          echo "TF_VAR_environment=${TF_ENV}" >> "$GITHUB_ENV"
           echo "Available Terraform workspaces:" 
-          terraform workspace list
-          CURRENT_WS="${PRIMARY_WORKSPACE}"
-          if terraform workspace list | grep -q "${PRIMARY_WORKSPACE}"; then
-            terraform workspace select "${PRIMARY_WORKSPACE}"
-            CURRENT_WS="${PRIMARY_WORKSPACE}"
-          elif terraform workspace list | grep -q "${FALLBACK_WORKSPACE}"; then
-            terraform workspace select "${FALLBACK_WORKSPACE}"
-            CURRENT_WS="${FALLBACK_WORKSPACE}"
+          terraform workspace list || true
+          if terraform workspace list | grep -q "^  ${TF_WORKSPACE}$"; then
+            terraform workspace select "${TF_WORKSPACE}"
           else
-            echo "::error::Required Terraform workspace '${PRIMARY_WORKSPACE}' not found" >&2
-            exit 1
+            terraform workspace new "${TF_WORKSPACE}"
           fi
-          echo "Using Terraform workspace: ${CURRENT_WS}"
+          echo "Using Terraform workspace: ${TF_WORKSPACE} (environment ${TF_ENV})"
+      - name: Terraform apply infrastructure
+        working-directory: infra/terraform
+        env:
+          TF_WORKSPACE: ${{ steps.ids.outputs.preview_id }}
+        run: |
+          set -euo pipefail
+          terraform apply -auto-approve -input=false
           terraform state pull > terraform.tfstate
           echo "TF_CLI_ARGS_output=-state=$(pwd)/terraform.tfstate" >> "$GITHUB_ENV"
 
@@ -117,7 +119,7 @@ jobs:
           PLATFORM_API_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/platform-api:v1.0.6-tls2
           PROXY_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/proxy:no-client-cert
           K8S_AGENT_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/k8s-agent:v1.0.2-tls-20251005-amd64
-          TF_WORKSPACE: prod
+          TF_WORKSPACE: ${{ steps.ids.outputs.preview_id }}
         run: |
           set -euo pipefail
           ./terraform/generate-helm-values.sh --non-interactive --tls
@@ -191,7 +193,8 @@ jobs:
     needs: deploy-preview
     env:
       INFRA_REPO_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
-      PREVIEW_ID: ${{ format('ext-%s', github.run_id) }}
+      PREVIEW_ID: ${{ needs.deploy-preview.outputs.preview_release }}
+      TF_VAR_environment: ${{ needs.deploy-preview.outputs.preview_release }}
     steps:
       - name: Checkout extension repository
         uses: actions/checkout@v4
