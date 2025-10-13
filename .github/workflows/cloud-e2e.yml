@@ -19,6 +19,8 @@ jobs:
     name: Deploy Preview Environment
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      INFRA_REPO_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
     outputs:
       preview_id: ${{ steps.ids.outputs.preview_id }}
       preview_namespace: ${{ steps.ids.outputs.preview_namespace }}
@@ -32,10 +34,18 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Checkout infrastructure repository
+        if: env.INFRA_REPO_TOKEN != ''
         uses: actions/checkout@v4
         with:
           repository: carlossanchez/aegis-swarm-gpt5-upgrade
           path: infra
+          token: ${{ env.INFRA_REPO_TOKEN }}
+
+      - name: Fail if infrastructure repository token is missing
+        if: env.INFRA_REPO_TOKEN == ''
+        run: |
+          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlossanchez/aegis-swarm-gpt5-upgrade."
+          exit 1
 
       - name: Derive preview identifiers
         id: ids
