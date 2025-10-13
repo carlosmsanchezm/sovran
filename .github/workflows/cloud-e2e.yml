@@ -82,29 +82,29 @@ jobs:
 
       - name: Prepare Terraform state
         working-directory: infra/terraform
-        env:
-          TF_WORKSPACE: ${{ steps.ids.outputs.preview_id }}
         run: |
           set -euo pipefail
           export TF_IN_AUTOMATION=1
           export TF_INPUT=0
+          TF_WS="${{ steps.ids.outputs.preview_id }}"
           terraform init -backend-config=backend.hcl -input=false
           TF_ENV="${{ steps.ids.outputs.preview_release }}"
           echo "TF_VAR_environment=${TF_ENV}" >> "$GITHUB_ENV"
           echo "Available Terraform workspaces:" 
           terraform workspace list || true
-          if terraform workspace list | grep -q "^  ${TF_WORKSPACE}$"; then
-            terraform workspace select "${TF_WORKSPACE}"
+          if terraform workspace list | grep -q "^  ${TF_WS}$"; then
+            terraform workspace select "${TF_WS}"
           else
-            terraform workspace new "${TF_WORKSPACE}"
+            terraform workspace new "${TF_WS}"
           fi
-          echo "Using Terraform workspace: ${TF_WORKSPACE} (environment ${TF_ENV})"
+          terraform workspace select "${TF_WS}"
+          echo "Using Terraform workspace: ${TF_WS} (environment ${TF_ENV})"
       - name: Terraform apply infrastructure
         working-directory: infra/terraform
-        env:
-          TF_WORKSPACE: ${{ steps.ids.outputs.preview_id }}
         run: |
           set -euo pipefail
+          TF_WS="${{ steps.ids.outputs.preview_id }}"
+          terraform workspace select "${TF_WS}"
           terraform apply -auto-approve -input=false
           terraform state pull > terraform.tfstate
           echo "TF_CLI_ARGS_output=-state=$(pwd)/terraform.tfstate" >> "$GITHUB_ENV"
@@ -119,7 +119,6 @@ jobs:
           PLATFORM_API_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/platform-api:v1.0.6-tls2
           PROXY_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/proxy:no-client-cert
           K8S_AGENT_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/k8s-agent:v1.0.2-tls-20251005-amd64
-          TF_WORKSPACE: ${{ steps.ids.outputs.preview_id }}
         run: |
           set -euo pipefail
           ./terraform/generate-helm-values.sh --non-interactive --tls
@@ -193,7 +192,7 @@ jobs:
     needs: deploy-preview
     env:
       INFRA_REPO_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
-      PREVIEW_ID: ${{ needs.deploy-preview.outputs.preview_release }}
+      PREVIEW_ID: ${{ needs.deploy-preview.outputs.preview_id }}
       TF_VAR_environment: ${{ needs.deploy-preview.outputs.preview_release }}
     steps:
       - name: Checkout extension repository
@@ -242,11 +241,11 @@ jobs:
         working-directory: infra/terraform
         run: |
           set -euo pipefail
-          terraform init -backend-config=backend.hcl
+          terraform init -backend-config=backend.hcl -input=false
           TF_WS="${PREVIEW_ID}"
           if terraform workspace list | grep -q "$TF_WS"; then
             terraform workspace select "$TF_WS"
-            terraform destroy -auto-approve || echo "Terraform destroy failed; manual cleanup may be required"
+            terraform destroy -auto-approve -input=false || echo "Terraform destroy failed; manual cleanup may be required"
             terraform workspace select default
             terraform workspace delete "$TF_WS" || true
           else
