@@ -8,5 +8,6 @@
     "types": ["node", "mocha", "vscode"],
     "inlineSourceMap": true
   },
-  "include": ["suite/**/*.ts"]
+  "include": ["suite/**/*.ts"],
+  "exclude": []
 }
