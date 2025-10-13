@@ -104,43 +104,43 @@ suite('Aegis REAL backend E2E', function () {
       assert.ok(ticket?.jwt, 'issueProxyTicket did not return jwt');
 
       const url = buildWebSocketUrl(ticket.proxyUrl, workspaceId);
-      const tls: Record<string, unknown> = {};
-      if (ticket.caPem) tls.ca = Buffer.from(ticket.caPem);
-      if (ticket.certPem) tls.cert = Buffer.from(ticket.certPem);
-      if (ticket.keyPem) tls.key = Buffer.from(ticket.keyPem);
-      if (ticket.serverName) tls.servername = ticket.serverName;
+    const tls: Record<string, unknown> = {};
+    if (ticket.caPem) tls.ca = Buffer.from(ticket.caPem);
+    if (ticket.certPem) tls.cert = Buffer.from(ticket.certPem);
+    if (ticket.keyPem) tls.key = Buffer.from(ticket.keyPem);
+    if (ticket.serverName) tls.servername = ticket.serverName;
 
-      const rejectUnauthorized = (await cfg.get<boolean>('security.rejectUnauthorized')) !== false;
-      const conn = new connectionModule.ConnectionManager(url, {
-        heartbeatIntervalMs: 500,
-        idleTimeoutMs: 10_000,
-        logLevel: 'debug',
-        log: (msg: string) => console.log('[real-e2e]', msg),
-        headers: { Authorization: `Bearer ${ticket.jwt}` },
-        tls,
-        rejectUnauthorized,
-      });
+    const rejectUnauthorized = (await cfg.get<boolean>('security.rejectUnauthorized')) !== false;
+    const conn = new connectionModule.ConnectionManager(url, {
+      heartbeatIntervalMs: 500,
+      idleTimeoutMs: 10_000,
+      logLevel: 'debug',
+      log: (msg: string) => console.log('[real-e2e]', msg),
+      headers: { Authorization: `Bearer ${ticket.jwt}` },
+      tls,
+      rejectUnauthorized,
+    });
 
-      const transport = await conn.open();
+    const transport = await conn.open();
 
-      const deadline = Date.now() + 60_000;
-      let heartbeatSeen = false;
-      while (Date.now() < deadline) {
-        const metrics = conn.getMetrics();
-        if (metrics.lastHeartbeatAt && metrics.lastHeartbeatAt > 0) {
-          heartbeatSeen = true;
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-      assert.ok(heartbeatSeen, 'No heartbeat observed from proxy');
-
-      const closed = new Promise<void>((resolve) => transport.onDidClose(() => resolve()));
-      transport.end();
-      await closed;
-
+    const deadline = Date.now() + 60_000;
+    let heartbeatSeen = false;
+    while (Date.now() < deadline) {
       const metrics = conn.getMetrics();
-      assert.ok(metrics.lastClose, 'Expected metrics.lastClose after disconnect');
+      if (metrics.lastHeartbeatAt && metrics.lastHeartbeatAt > 0) {
+        heartbeatSeen = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    assert.ok(heartbeatSeen, 'No heartbeat observed from proxy');
+
+    const closed = new Promise<void>((resolve) => transport.onDidClose(() => resolve()));
+    transport.end();
+    await closed;
+
+    const metrics = conn.getMetrics();
+    assert.ok(metrics.lastClose, 'Expected metrics.lastClose after disconnect');
     } finally {
       (vscode.window.showInputBox as any) = originalShowInput;
     }

@@ -20,9 +20,12 @@ export async function run(): Promise<void> {
 
   const testsRoot = __dirname;
   const files = await new Promise<string[]>((resolve, reject) => {
-    glob('**/*.js', { cwd: testsRoot }, (err, matches) => {
-      if (err) reject(err);
-      else resolve(matches);
+    glob('**/*.js', { cwd: testsRoot }, (err: Error | null, matches: string[]) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(matches);
+      }
     });
   });
 

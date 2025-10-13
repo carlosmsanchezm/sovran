@@ -1,0 +1,184 @@
+name: Extension Cloud TLS E2E
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+
+concurrency:
+  group: extension-preview-${{ github.ref }}-${{ github.event.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    name: Deploy Preview Environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      preview_id: ${{ steps.ids.outputs.preview_id }}
+      preview_namespace: ${{ steps.ids.outputs.preview_namespace }}
+      preview_release: ${{ steps.ids.outputs.preview_release }}
+      grpc_addr: ${{ steps.configure.outputs.grpc_addr }}
+      grpc_host: ${{ steps.configure.outputs.grpc_host }}
+      proxy_hostname: ${{ steps.configure.outputs.proxy_hostname }}
+      grpc_ca: ${{ steps.configure.outputs.grpc_ca }}
+    steps:
+      - name: Checkout extension repository
+        uses: actions/checkout@v4
+
+      - name: Checkout infrastructure repository
+        uses: actions/checkout@v4
+        with:
+          repository: carlossanchez/aegis-swarm-gpt5-upgrade
+          path: infra
+
+      - name: Derive preview identifiers
+        id: ids
+        run: |
+          preview_id="ext-${GITHUB_RUN_ID}"
+          echo "preview_id=${preview_id}" >>"${GITHUB_OUTPUT}"
+          echo "preview_namespace=${preview_id}" >>"${GITHUB_OUTPUT}"
+          echo "preview_release=${preview_id}" >>"${GITHUB_OUTPUT}"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform init & apply
+        working-directory: infra/terraform
+        env:
+          TF_WORKSPACE: ${{ steps.ids.outputs.preview_id }}
+        run: |
+          set -euo pipefail
+          terraform init -backend-config=backend.hcl
+          TF_WS="$TF_WORKSPACE"
+          unset TF_WORKSPACE
+          terraform workspace select "$TF_WS" || terraform workspace new "$TF_WS"
+          terraform apply -auto-approve
+
+      - name: Deploy control plane via Helm
+        working-directory: infra
+        env:
+          HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}
+          K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
+          SPOKE_HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}-spoke
+          SKIP_ROUTE53_UPDATE: '1'
+        run: |
+          set -euo pipefail
+          ./terraform/generate-helm-values.sh --non-interactive --tls
+
+      - name: Install CLI dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq dnsutils
+
+      - name: Configure preview endpoints
+        id: configure
+        env:
+          HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}
+          K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
+          TERRAFORM_DIR: infra/terraform
+        run: |
+          set -euo pipefail
+          ./scripts/ci/configure-preview.sh
+
+      - name: Upload TLS CA bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls-ca-bundle
+          path: ${{ steps.configure.outputs.grpc_ca }}
+
+  extension-e2e:
+    name: Extension TLS E2E
+    runs-on: ubuntu-latest
+    needs: deploy-preview
+    timeout-minutes: 40
+    env:
+      AEGIS_GRPC_ADDR: ${{ needs.deploy-preview.outputs.grpc_addr }}
+      AEGIS_PLATFORM_NAMESPACE: ${{ needs.deploy-preview.outputs.preview_namespace }}
+      AEGIS_PROJECT_ID: ${{ format('p-ext-%s', github.run_id) }}
+      NODE_EXTRA_CA_CERTS: ${{ runner.temp }}/tls/aegis-platform-api-ca.crt
+      AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
+      AEGIS_TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
+    steps:
+      - name: Checkout extension repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download TLS CA bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: tls-ca-bundle
+          path: ${{ runner.temp }}/tls
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build extension and E2E harness
+        run: |
+          npm run build
+          npm run build:test-e2e:real
+
+      - name: Run VS Code cloud TLS E2E
+        env:
+          AEGIS_CA_PEM: ${{ runner.temp }}/tls/aegis-platform-api-ca.crt
+        run: npm run test:e2e:real
+
+  teardown:
+    name: Teardown Preview Environment
+    if: always()
+    runs-on: ubuntu-latest
+    needs: deploy-preview
+    env:
+      PREVIEW_ID: ${{ format('ext-%s', github.run_id) }}
+    steps:
+      - name: Checkout extension repository
+        uses: actions/checkout@v4
+
+      - name: Checkout infrastructure repository
+        uses: actions/checkout@v4
+        with:
+          repository: carlossanchez/aegis-swarm-gpt5-upgrade
+          path: infra
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform destroy
+        working-directory: infra/terraform
+        run: |
+          set -euo pipefail
+          terraform init -backend-config=backend.hcl
+          TF_WS="${PREVIEW_ID}"
+          if terraform workspace list | grep -q "$TF_WS"; then
+            terraform workspace select "$TF_WS"
+            terraform destroy -auto-approve || echo "Terraform destroy failed; manual cleanup may be required"
+            terraform workspace select default
+            terraform workspace delete "$TF_WS" || true
+          else
+            echo "Workspace $TF_WS not found; skipping destroy"
+          fi
