@@ -1,6 +1,9 @@
 name: Extension Cloud TLS E2E
 
 on:
+  push:
+    branches:
+      - feature/ci-tests
   pull_request:
   workflow_dispatch:
 
