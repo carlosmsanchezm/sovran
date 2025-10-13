@@ -33,18 +33,31 @@ jobs:
       - name: Checkout extension repository
         uses: actions/checkout@v4
 
+      - name: Verify infra repository access
+        if: env.INFRA_REPO_TOKEN != ''
+        run: |
+          set -euo pipefail
+          status=$(curl -sS -o /tmp/infra_repo.json -w "%{http_code}" \
+            -H "Authorization: token ${INFRA_REPO_TOKEN}" \
+            https://api.github.com/repos/carlosmsanchezm/aegis)
+          cat /tmp/infra_repo.json
+          if [[ "$status" != "200" ]]; then
+            echo "::error::Unable to access repository carlosmsanchezm/aegis (HTTP ${status}). Ensure the token has repo scope."
+            exit 1
+          fi
+
       - name: Checkout infrastructure repository
         if: env.INFRA_REPO_TOKEN != ''
         uses: actions/checkout@v4
         with:
-          repository: carlossanchezm/aegis
+          repository: carlosmsanchezm/aegis
           path: infra
           token: ${{ env.INFRA_REPO_TOKEN }}
 
       - name: Fail if infrastructure repository token is missing
         if: env.INFRA_REPO_TOKEN == ''
         run: |
-          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlossanchezm/aegis."
+          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlosmsanchezm/aegis."
           exit 1
 
       - name: Derive preview identifiers
@@ -164,18 +177,31 @@ jobs:
       - name: Checkout extension repository
         uses: actions/checkout@v4
 
+      - name: Verify infra repository access
+        if: env.INFRA_REPO_TOKEN != ''
+        run: |
+          set -euo pipefail
+          status=$(curl -sS -o /tmp/infra_repo.json -w "%{http_code}" \
+            -H "Authorization: token ${INFRA_REPO_TOKEN}" \
+            https://api.github.com/repos/carlosmsanchezm/aegis)
+          cat /tmp/infra_repo.json
+          if [[ "$status" != "200" ]]; then
+            echo "::error::Unable to access repository carlosmsanchezm/aegis (HTTP ${status}). Ensure the token has repo scope."
+            exit 1
+          fi
+
       - name: Checkout infrastructure repository
         if: env.INFRA_REPO_TOKEN != ''
         uses: actions/checkout@v4
         with:
-          repository: carlossanchezm/aegis
+          repository: carlosmsanchezm/aegis
           path: infra
           token: ${{ env.INFRA_REPO_TOKEN }}
 
       - name: Fail if infrastructure repository token is missing
         if: env.INFRA_REPO_TOKEN == ''
         run: |
-          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlossanchezm/aegis."
+          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlosmsanchezm/aegis."
           exit 1
 
       - name: Configure AWS credentials
