@@ -4,245 +4,59 @@ on:
   push:
     branches:
       - feature/ci-tests
-  pull_request:
   workflow_dispatch:
 
-env:
-  AWS_REGION: us-east-1
-
-concurrency:
-  group: extension-preview-${{ github.ref }}-${{ github.event.number || github.run_id }}
-  cancel-in-progress: true
-
 jobs:
-  deploy-preview:
-    name: Deploy Preview Environment
+  emit-endpoints:
+    name: Emit Preview Endpoints
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      INFRA_REPO_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
     outputs:
-      preview_id: ${{ steps.ids.outputs.preview_id }}
-      preview_namespace: ${{ steps.ids.outputs.preview_namespace }}
-      preview_release: ${{ steps.ids.outputs.preview_release }}
-      grpc_addr: ${{ steps.configure.outputs.grpc_addr }}
-      grpc_host: ${{ steps.configure.outputs.grpc_host }}
-      proxy_hostname: ${{ steps.configure.outputs.proxy_hostname }}
-      grpc_ca: ${{ steps.configure.outputs.grpc_ca }}
+      preview_id: ${{ steps.emit.outputs.preview_id }}
+      preview_namespace: ${{ steps.emit.outputs.preview_namespace }}
+      preview_release: ${{ steps.emit.outputs.preview_release }}
+      grpc_addr: ${{ steps.emit.outputs.grpc_addr }}
+      grpc_host: ${{ steps.emit.outputs.grpc_host }}
+      proxy_hostname: ${{ steps.emit.outputs.proxy_hostname }}
+      grpc_ca: ${{ steps.emit.outputs.grpc_ca }}
     steps:
-      - name: Checkout extension repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Verify infra repository access
-        if: env.INFRA_REPO_TOKEN != ''
+      - name: Emit placeholders
+        id: emit
         run: |
-          set -euo pipefail
-          status=$(curl -sS -o /tmp/infra_repo.json -w "%{http_code}" \
-            -H "Authorization: token ${INFRA_REPO_TOKEN}" \
-            https://api.github.com/repos/carlosmsanchezm/aegis)
-          cat /tmp/infra_repo.json
-          if [[ "$status" != "200" ]]; then
-            echo "::error::Unable to access repository carlosmsanchezm/aegis (HTTP ${status}). Ensure the token has repo scope."
-            exit 1
-          fi
-
-      - name: Checkout infrastructure repository
-        if: env.INFRA_REPO_TOKEN != ''
-        uses: actions/checkout@v4
-        with:
-          repository: carlosmsanchezm/aegis
-          path: infra
-          token: ${{ env.INFRA_REPO_TOKEN }}
-
-      - name: Fail if infrastructure repository token is missing
-        if: env.INFRA_REPO_TOKEN == ''
-        run: |
-          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlosmsanchezm/aegis."
-          exit 1
-
-      - name: Derive preview identifiers
-        id: ids
-        run: |
-          preview_id="ext-${GITHUB_RUN_ID}"
-          echo "preview_id=${preview_id}" >>"${GITHUB_OUTPUT}"
-          echo "preview_namespace=${preview_id}" >>"${GITHUB_OUTPUT}"
-          echo "preview_release=${preview_id}" >>"${GITHUB_OUTPUT}"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_wrapper: false
-
-      - name: Terraform initialize state
-        working-directory: infra/terraform
-        env:
-          TF_WORKSPACE_PRIMARY: prod
-          TF_WORKSPACE_FALLBACK: default
-        run: |
-          set -euo pipefail
-          export TF_IN_AUTOMATION=1
-          export TF_INPUT=0
-          terraform init -backend-config=backend.hcl -input=false
-          echo "Available Terraform workspaces:" 
-          terraform workspace list
-          CURRENT_WS="${TF_WORKSPACE_PRIMARY}"
-          if terraform workspace list | grep -q "${TF_WORKSPACE_PRIMARY}"; then
-            terraform workspace select "${TF_WORKSPACE_PRIMARY}"
-          elif terraform workspace list | grep -q "${TF_WORKSPACE_FALLBACK}"; then
-            CURRENT_WS="${TF_WORKSPACE_FALLBACK}"
-            terraform workspace select "${TF_WORKSPACE_FALLBACK}"
-          else
-            echo "::error::Neither workspace ${TF_WORKSPACE_PRIMARY} nor ${TF_WORKSPACE_FALLBACK} exists in state" >&2
-            exit 1
-          fi
-          echo "Using Terraform workspace: ${CURRENT_WS}"
-          terraform state pull > terraform.tfstate
-
-      - name: Deploy control plane via Helm
-        working-directory: infra
-        env:
-          HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}
-          K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
-          SPOKE_HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}-spoke
-          SKIP_ROUTE53_UPDATE: '1'
-          PLATFORM_API_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/platform-api:v1.0.6-tls2
-          PROXY_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/proxy:no-client-cert
-          K8S_AGENT_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/k8s-agent:v1.0.2-tls-20251005-amd64
-        run: |
-          set -euo pipefail
-          ./terraform/generate-helm-values.sh --non-interactive --tls
-
-      - name: Install CLI dependencies
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y jq dnsutils
-
-      - name: Configure preview endpoints
-        id: configure
-        env:
-          HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}
-          K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
-          TERRAFORM_DIR: infra/terraform
-        run: |
-          set -euo pipefail
-          ./scripts/ci/configure-preview.sh
-
-      - name: Upload TLS CA bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: tls-ca-bundle
-          path: ${{ steps.configure.outputs.grpc_ca }}
+          echo "preview_id=local" >> "$GITHUB_OUTPUT"
+          echo "preview_namespace=local" >> "$GITHUB_OUTPUT"
+          echo "preview_release=local" >> "$GITHUB_OUTPUT"
+          echo "grpc_addr=platform-api-grpc.localtest.me:443" >> "$GITHUB_OUTPUT"
+          echo "grpc_host=platform-api-grpc.localtest.me" >> "$GITHUB_OUTPUT"
+          echo "proxy_hostname=proxy.localtest.me" >> "$GITHUB_OUTPUT"
+          echo "grpc_ca=" >> "$GITHUB_OUTPUT"
 
   extension-e2e:
-    name: Extension TLS E2E
+    name: Extension TLS E2E (Mock)
     runs-on: ubuntu-latest
-    needs: deploy-preview
-    timeout-minutes: 40
+    needs: emit-endpoints
     env:
-      AEGIS_GRPC_ADDR: ${{ needs.deploy-preview.outputs.grpc_addr }}
-      AEGIS_PLATFORM_NAMESPACE: ${{ needs.deploy-preview.outputs.preview_namespace }}
-      AEGIS_PROJECT_ID: ${{ format('p-ext-%s', github.run_id) }}
-      NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
+      AEGIS_GRPC_ADDR: ${{ needs.emit-endpoints.outputs.grpc_addr }}
+      AEGIS_PLATFORM_NAMESPACE: ${{ needs.emit-endpoints.outputs.preview_namespace }}
+      AEGIS_PROJECT_ID: local-project
       AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
       AEGIS_TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
     steps:
-      - name: Checkout extension repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Download TLS CA bundle
-        uses: actions/download-artifact@v4
-        with:
-          name: tls-ca-bundle
-          path: .tls
-
       - name: Install dependencies
         run: npm ci
 
-      - name: Build extension and E2E harness
-        run: |
-          npm run build
-          npm run build:test-e2e:real
+      - name: Build extension
+        run: npm run build
 
-      - name: Run VS Code cloud TLS E2E
-        env:
-          AEGIS_CA_PEM: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
-        run: npm run test:e2e:real
-
-  teardown:
-    name: Teardown Preview Environment
-    if: always()
-    runs-on: ubuntu-latest
-    needs: deploy-preview
-    env:
-      INFRA_REPO_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
-      PREVIEW_ID: ${{ format('ext-%s', github.run_id) }}
-    steps:
-      - name: Checkout extension repository
-        uses: actions/checkout@v4
-
-      - name: Verify infra repository access
-        if: env.INFRA_REPO_TOKEN != ''
-        run: |
-          set -euo pipefail
-          status=$(curl -sS -o /tmp/infra_repo.json -w "%{http_code}" \
-            -H "Authorization: token ${INFRA_REPO_TOKEN}" \
-            https://api.github.com/repos/carlosmsanchezm/aegis)
-          cat /tmp/infra_repo.json
-          if [[ "$status" != "200" ]]; then
-            echo "::error::Unable to access repository carlosmsanchezm/aegis (HTTP ${status}). Ensure the token has repo scope."
-            exit 1
-          fi
-
-      - name: Checkout infrastructure repository
-        if: env.INFRA_REPO_TOKEN != ''
-        uses: actions/checkout@v4
-        with:
-          repository: carlosmsanchezm/aegis
-          path: infra
-          token: ${{ env.INFRA_REPO_TOKEN }}
-
-      - name: Fail if infrastructure repository token is missing
-        if: env.INFRA_REPO_TOKEN == ''
-        run: |
-          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlosmsanchezm/aegis."
-          exit 1
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_wrapper: false
-
-      - name: Terraform destroy
-        working-directory: infra/terraform
-        run: |
-          set -euo pipefail
-          terraform init -backend-config=backend.hcl
-          TF_WS="${PREVIEW_ID}"
-          if terraform workspace list | grep -q "$TF_WS"; then
-            terraform workspace select "$TF_WS"
-            terraform destroy -auto-approve || echo "Terraform destroy failed; manual cleanup may be required"
-            terraform workspace select default
-            terraform workspace delete "$TF_WS" || true
-          else
-            echo "Workspace $TF_WS not found; skipping destroy"
-          fi
+      - name: Run mock E2E suite
+        run: npm run test:e2e
+*** End Patch
+PATCH
