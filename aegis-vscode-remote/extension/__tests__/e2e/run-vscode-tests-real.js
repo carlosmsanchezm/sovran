@@ -85,6 +85,9 @@ async function submitWorkspaceViaPlatformApi(workspaceId, opts) {
     if (opts.image) {
       workloadPayload.workspace.image = opts.image;
     }
+    if (opts.clusterId) {
+      workloadPayload.cluster_id = opts.clusterId;
+    }
 
     await new Promise((resolve, reject) => {
       client.SubmitWorkload({ workload: workloadPayload }, metadata, (err) => {
@@ -137,6 +140,7 @@ async function provisionWorkspaceIfNeeded() {
     queue: process.env.AEGIS_TEST_QUEUE || 'default',
     flavor: process.env.AEGIS_TEST_FLAVOR || 'cpu-small',
     image: process.env.AEGIS_TEST_IMAGE,
+    clusterId: process.env.AEGIS_TEST_CLUSTER_ID,
   });
 
   const waitTimeout = process.env.AEGIS_TEST_WORKSPACE_TIMEOUT || '300s';
