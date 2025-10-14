@@ -196,7 +196,9 @@ async function provisionWorkspaceIfNeeded() {
 
   const { execa } = await import('execa');
 
-  const namespace = process.env.AEGIS_PLATFORM_NAMESPACE || 'default';
+  const namespace = process.env.AEGIS_WORKLOAD_NAMESPACE
+    || process.env.AEGIS_PLATFORM_NAMESPACE
+    || 'default';
   const projectId = process.env.AEGIS_PROJECT_ID;
   if (!projectId) {
     throw new Error('AEGIS_PROJECT_ID must be set to auto-provision a workspace');
