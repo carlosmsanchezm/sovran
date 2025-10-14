@@ -291,32 +291,6 @@ jobs:
           set -euo pipefail
           aws eks update-kubeconfig --region "${AWS_REGION}" --name "aegis-spoke-${{ needs.deploy-preview.outputs.preview_release }}"
 
-      - name: Port-forward proxy service locally
-        run: |
-          set -euo pipefail
-          PROXY_HOST="${{ needs.deploy-preview.outputs.proxy_hostname }}"
-          K8S_NS="${{ needs.deploy-preview.outputs.preview_namespace }}"
-          RELEASE="${{ needs.deploy-preview.outputs.preview_release }}"
-          if [[ -z "${PROXY_HOST}" ]]; then
-            echo "Proxy hostname output was empty"
-            exit 1
-          fi
-          sudo sed -i.bak "/${PROXY_HOST}/d" /etc/hosts
-          echo "127.0.0.1 ${PROXY_HOST}" | sudo tee -a /etc/hosts
-          nohup kubectl port-forward svc/${RELEASE}-proxy -n "${K8S_NS}" 8080:8080 >/tmp/proxy-port-forward.log 2>&1 &
-          echo $! > proxy-port-forward.pid
-          sleep 5
-          if ! ps -p "$(cat proxy-port-forward.pid)" >/dev/null 2>&1; then
-            echo "kubectl port-forward exited unexpectedly"
-            cat /tmp/proxy-port-forward.log || true
-            exit 1
-          fi
-          curl --max-time 5 -I http://127.0.0.1:8080 || {
-            echo "proxy health probe failed"
-            cat /tmp/proxy-port-forward.log || true
-            exit 1
-          }
-
       - name: Install dependencies
         working-directory: aegis-vscode-remote/extension
         run: npm ci
@@ -343,25 +317,6 @@ jobs:
           cat aegis-vscode-remote/extension/__tests__/test-results/junit/mocha-e2e-real-results.xml || true
           echo "---------------------------"
 
-      - name: Cleanup proxy port-forward
-        if: always()
-        run: |
-          if [[ -f proxy-port-forward.pid ]]; then
-            PORT_FORWARD_PID="$(cat proxy-port-forward.pid)"
-            if ps -p "${PORT_FORWARD_PID}" >/dev/null 2>&1; then
-              kill "${PORT_FORWARD_PID}" || true
-              wait "${PORT_FORWARD_PID}" 2>/dev/null || true
-            fi
-          fi
-          if [[ -f /tmp/proxy-port-forward.log ]]; then
-            echo "---- proxy port-forward log ----"
-            cat /tmp/proxy-port-forward.log
-            echo "---- end proxy port-forward log ----"
-          fi
-          PROXY_HOST="${{ needs.deploy-preview.outputs.proxy_hostname }}"
-          if [[ -n "${PROXY_HOST}" ]]; then
-            sudo sed -i.bak "/${PROXY_HOST}/d" /etc/hosts 2>/dev/null || true
-          fi
 
   teardown:
     name: Teardown Preview Environment

@@ -29,6 +29,30 @@ need() {
 need kubectl
 need terraform
 need dig
+need timeout
+check_tcp() {
+  local ip="$1"
+  local port="$2"
+  if command -v nc >/dev/null 2>&1; then
+    nc -z -w3 "$ip" "$port" >/dev/null 2>&1
+  else
+    timeout 3 bash -c "cat < /dev/null > /dev/tcp/${ip}/${port}" >/dev/null 2>&1
+  fi
+}
+
+pick_reachable_ip() {
+  local host="$1"
+  local port="$2"
+  local ips
+  ips=$(dig +short "$host" | sort -u)
+  for ip in $ips; do
+    if [[ -n "$ip" ]] && check_tcp "$ip" "$port"; then
+      echo "$ip"
+      return 0
+    fi
+  done
+  echo ""
+}
 
 log() {
   printf '[configure-preview] %s\n' "$*" >&2
@@ -86,8 +110,22 @@ log "  ${PLATFORM_DNS} → ${PLATFORM_LB}"
 log "  ${PROXY_DNS} → ${PROXY_LB}"
 
 log "Resolving LoadBalancer IPs for local /etc/hosts overrides"
-PLATFORM_IP="$(dig +short "${PLATFORM_LB}" | head -1)"
-PROXY_IP="$(dig +short "${PROXY_LB}" | head -1)"
+PLATFORM_IP="$(pick_reachable_ip "${PLATFORM_LB}" 8081)"
+PROXY_IP="$(pick_reachable_ip "${PROXY_LB}" 8080)"
+
+if [[ -z "${PLATFORM_IP}" ]]; then
+  PLATFORM_IP="$(dig +short "${PLATFORM_LB}" | head -1)"
+  if [[ -n "${PLATFORM_IP}" ]]; then
+    log "  No reachable platform IP detected; falling back to first IP ${PLATFORM_IP}"
+  fi
+fi
+
+if [[ -z "${PROXY_IP}" ]]; then
+  PROXY_IP="$(dig +short "${PROXY_LB}" | head -1)"
+  if [[ -n "${PROXY_IP}" ]]; then
+    log "  No reachable proxy IP detected; falling back to first IP ${PROXY_IP}"
+  fi
+fi
 
 if [[ -n "${PLATFORM_IP}" ]]; then
   log "  Platform API IP: ${PLATFORM_IP}"
