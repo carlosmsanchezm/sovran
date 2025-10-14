@@ -283,14 +283,8 @@ async function provisionWorkspaceIfNeeded() {
 
   if (!podsFound) {
     try {
-      const { stdout: workloads } = await execa('kubectl', [
-        'get',
-        'aegisworkloads.aegis.yourorg.dev',
-        '-n',
-        namespace,
-        '-o',
-        'yaml'
-      ]);
+      const snapshotArgs = ['get', 'aegisworkloads.aegis.yourorg.dev', '-A', '-o', 'yaml'];
+      const { stdout: workloads } = await execa('kubectl', snapshotArgs);
       // eslint-disable-next-line no-console
       console.warn('AegisWorkloads snapshot:\n', workloads);
     } catch (snapErr) {
