@@ -104,6 +104,8 @@ suite('Aegis REAL backend E2E', function () {
       assert.ok(ticket?.jwt, 'issueProxyTicket did not return jwt');
 
       const url = buildWebSocketUrl(ticket.proxyUrl, workspaceId);
+      console.log('[real-e2e] proxyUrl from ticket', ticket.proxyUrl);
+      console.log('[real-e2e] websocket endpoint', url);
       const tls: Record<string, unknown> = {};
       if (ticket.caPem) tls.ca = Buffer.from(ticket.caPem);
       if (ticket.certPem) tls.cert = Buffer.from(ticket.certPem);
