@@ -154,24 +154,24 @@ jobs:
           set -euo pipefail
           tmpfile=$(mktemp)
           cat <<EOF > "${tmpfile}"
-apiVersion: v1
-clusters:
-- cluster:
-    certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-    server: https://kubernetes.default.svc
-  name: ${CLUSTER_ID}
-contexts:
-- context:
-    cluster: ${CLUSTER_ID}
-    user: ${CLUSTER_ID}
-  name: ${CLUSTER_ID}
-current-context: ${CLUSTER_ID}
-kind: Config
-users:
-- name: ${CLUSTER_ID}
-  user:
-    tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
-EOF
+          apiVersion: v1
+          clusters:
+          - cluster:
+              certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              server: https://kubernetes.default.svc
+            name: ${CLUSTER_ID}
+          contexts:
+          - context:
+              cluster: ${CLUSTER_ID}
+              user: ${CLUSTER_ID}
+            name: ${CLUSTER_ID}
+          current-context: ${CLUSTER_ID}
+          kind: Config
+          users:
+          - name: ${CLUSTER_ID}
+            user:
+              tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+          EOF
           kubectl create secret generic aegis-kubeconfigs \
             --namespace "${K8S_NAMESPACE}" \
             --from-file="${CLUSTER_ID}=${tmpfile}" \
