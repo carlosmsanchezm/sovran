@@ -221,6 +221,17 @@ jobs:
             -d '{"clusterId":"'"${CLUSTER_ID}"'","availableFlavors":[{"name":"cpu-small"}]}' \
             "${HOST}" aegis.v1.AegisPlatform/Heartbeat || true
 
+      - name: Check platform components
+        env:
+          K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
+        run: |
+          set -euo pipefail
+          echo "== Pods in ${K8S_NAMESPACE} =="
+          kubectl get pods -n "${K8S_NAMESPACE}"
+          echo
+          echo "== AegisWorkloads in ${K8S_NAMESPACE} =="
+          kubectl get aegisworkloads.aegis.yourorg.dev -n "${K8S_NAMESPACE}" || true
+
   extension-e2e:
     name: Extension TLS E2E
     runs-on: ubuntu-latest
