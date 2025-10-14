@@ -291,6 +291,22 @@ jobs:
           set -euo pipefail
           aws eks update-kubeconfig --region "${AWS_REGION}" --name "aegis-spoke-${{ needs.deploy-preview.outputs.preview_release }}"
 
+      - name: Port-forward proxy service locally
+        run: |
+          set -euo pipefail
+          PROXY_HOST="${{ needs.deploy-preview.outputs.proxy_hostname }}"
+          K8S_NS="${{ needs.deploy-preview.outputs.preview_namespace }}"
+          RELEASE="${{ needs.deploy-preview.outputs.preview_release }}"
+          if [[ -z "${PROXY_HOST}" ]]; then
+            echo "Proxy hostname output was empty"
+            exit 1
+          fi
+          sudo sed -i.bak "/${PROXY_HOST}/d" /etc/hosts
+          echo "127.0.0.1 ${PROXY_HOST}" | sudo tee -a /etc/hosts
+          kubectl port-forward svc/${RELEASE}-proxy -n "${K8S_NS}" 8080:8080 >/tmp/proxy-port-forward.log 2>&1 &
+          echo $! > proxy-port-forward.pid
+          sleep 5
+
       - name: Install dependencies
         working-directory: aegis-vscode-remote/extension
         run: npm ci
@@ -316,6 +332,22 @@ jobs:
           echo "---- Mocha JUnit report ----"
           cat aegis-vscode-remote/extension/__tests__/test-results/junit/mocha-e2e-real-results.xml || true
           echo "---------------------------"
+
+      - name: Cleanup proxy port-forward
+        if: always()
+        run: |
+          if [[ -f proxy-port-forward.pid ]]; then
+            PORT_FORWARD_PID="$(cat proxy-port-forward.pid)"
+            if ps -p "${PORT_FORWARD_PID}" >/dev/null 2>&1; then
+              kill "${PORT_FORWARD_PID}" || true
+              wait "${PORT_FORWARD_PID}" 2>/dev/null || true
+            fi
+          fi
+          if [[ -f /tmp/proxy-port-forward.log ]]; then
+            echo "---- proxy port-forward log ----"
+            cat /tmp/proxy-port-forward.log
+            echo "---- end proxy port-forward log ----"
+          fi
 
   teardown:
     name: Teardown Preview Environment
