@@ -103,7 +103,7 @@ jobs:
           echo "## Test Summary" >> $GITHUB_STEP_SUMMARY
           node <<'NODE' >> $GITHUB_STEP_SUMMARY
             const fs = require('fs');
-            const summaryPath = './aegis-vscode-remote/extension/coverage/coverage-summary.json';
+            const summaryPath = './aegis-vscode-remote/extension/covmake serage/coverage-summary.json';
             if (fs.existsSync(summaryPath)) {
               const summary = require(summaryPath).total;
               console.log(`Lines: ${summary.lines.pct}%  |  Stmts: ${summary.statements.pct}%  |  Branches: ${summary.branches.pct}%  |  Funcs: ${summary.functions.pct}%`);
