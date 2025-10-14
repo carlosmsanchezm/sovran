@@ -155,8 +155,8 @@ async function submitWorkspaceViaPlatformApi(workspaceId, opts) {
       workloadPayload.cluster_id = opts.clusterId;
     }
 
-    const maxAttempts = Number.parseInt(process.env.AEGIS_WORKSPACE_SUBMIT_ATTEMPTS || '5', 10);
-    const retryDelayMs = Number.parseInt(process.env.AEGIS_WORKSPACE_SUBMIT_DELAY_MS || '5000', 10);
+    const maxAttempts = Number.parseInt(process.env.AEGIS_WORKSPACE_SUBMIT_ATTEMPTS || '12', 10);
+    const retryDelayMs = Number.parseInt(process.env.AEGIS_WORKSPACE_SUBMIT_DELAY_MS || '10000', 10);
     let attempt = 0;
     for (;;) {
       attempt += 1;

@@ -204,6 +204,8 @@ jobs:
       AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
       AEGIS_TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
       AEGIS_E2E_DEBUG: '1'
+      AEGIS_WORKSPACE_SUBMIT_ATTEMPTS: '12'
+      AEGIS_WORKSPACE_SUBMIT_DELAY_MS: '10000'
     steps:
       - name: Checkout extension repository
         uses: actions/checkout@v4
