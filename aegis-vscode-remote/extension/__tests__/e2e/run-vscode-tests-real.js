@@ -5,6 +5,8 @@ const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const protoPath = path.resolve(__dirname, '../../proto/aegis_platform.proto');
+const logTailLines = Number.parseInt(process.env.AEGIS_E2E_LOG_TAIL || '2000', 10);
 const parseJson = (value, fallback) => {
   if (!value) {
     return fallback;
@@ -18,7 +20,6 @@ const parseJson = (value, fallback) => {
 
 async function submitWorkspaceViaPlatformApi(workspaceId, opts) {
   const debugLogs = process.env.AEGIS_E2E_DEBUG === '1';
-  const protoPath = path.resolve(__dirname, '../../proto/aegis_platform.proto');
   const packageDefinition = await protoLoader.load(protoPath, {
     keepCase: true,
     longs: String,
@@ -146,6 +147,7 @@ async function submitWorkspaceViaPlatformApi(workspaceId, opts) {
         flavor: flavorName,
         interactive: true,
         ports: [11111],
+        command: opts.workspaceCommand,
       },
     };
     if (opts.image) {
@@ -189,11 +191,123 @@ async function submitWorkspaceViaPlatformApi(workspaceId, opts) {
   }
 }
 
+async function ensureWorkspaceRunning(workspaceId, opts) {
+  const debugLogs = process.env.AEGIS_E2E_DEBUG === '1';
+  const packageDefinition = await protoLoader.load(protoPath, {
+    keepCase: true,
+    longs: String,
+    enums: String,
+    defaults: false,
+    oneofs: true,
+  });
+  const loaded = grpc.loadPackageDefinition(packageDefinition);
+  const platformPkg = loaded?.aegis?.v1;
+  if (!platformPkg || !platformPkg.AegisPlatform) {
+    throw new Error('Failed to load AegisPlatform proto definition');
+  }
+
+  const useTls = !opts.skipTls && opts.caPath;
+  let credentials;
+  if (useTls) {
+    const ca = fs.readFileSync(opts.caPath);
+    credentials = grpc.credentials.createSsl(ca);
+  } else if (opts.skipTls) {
+    credentials = grpc.credentials.createInsecure();
+  } else {
+    credentials = grpc.credentials.createSsl();
+  }
+
+  const client = new platformPkg.AegisPlatform(opts.grpcAddr, credentials);
+  try {
+    const metadata = new grpc.Metadata();
+    if (opts.token) {
+      metadata.add('authorization', `Bearer ${opts.token}`);
+    }
+    if (opts.email) {
+      metadata.add('x-aegis-user', opts.email);
+    }
+    if (opts.namespace) {
+      metadata.add('x-aegis-namespace', opts.namespace);
+    }
+
+    if (opts.clusterId) {
+      await new Promise((resolve, reject) => {
+        client.StartWorkload({ id: workspaceId, cluster_id: opts.clusterId }, metadata, (err) => {
+          if (err) {
+            if (err.code === grpc.status.FAILED_PRECONDITION || err.code === grpc.status.NOT_FOUND) {
+              if (debugLogs) {
+                // eslint-disable-next-line no-console
+                console.warn('[real-e2e] StartWorkload warning:', err.details || err.message);
+              }
+              resolve();
+              return;
+            }
+            reject(err);
+          } else {
+            if (debugLogs) {
+              // eslint-disable-next-line no-console
+              console.log('[real-e2e] StartWorkload invoked for workspace', workspaceId);
+            }
+            resolve();
+          }
+        });
+      });
+    }
+
+    const waitTargetStatus = (process.env.AEGIS_WORKSPACE_EXPECTED_STATUS || 'RUNNING').trim().toUpperCase();
+    if (!waitTargetStatus || waitTargetStatus === 'NONE') {
+      return;
+    }
+
+    const readyTimeoutMs = Number.parseInt(process.env.AEGIS_WORKSPACE_READY_TIMEOUT_MS || '480000', 10);
+    const pollIntervalMs = Number.parseInt(process.env.AEGIS_WORKSPACE_READY_POLL_MS || '5000', 10);
+    const deadline = Date.now() + Math.max(readyTimeoutMs, 1000);
+    let reachedStatus = false;
+    while (Date.now() < deadline) {
+      try {
+        const workload = await new Promise((resolve, reject) => {
+          client.GetWorkload({ id: workspaceId }, metadata, (err, response) => {
+            if (err) {
+              reject(err);
+            } else {
+              resolve(response);
+            }
+          });
+        });
+        const status = (workload?.status || '').toUpperCase();
+        if (status === waitTargetStatus) {
+          reachedStatus = true;
+          if (debugLogs) {
+            // eslint-disable-next-line no-console
+            console.log('[real-e2e] workspace status reached', waitTargetStatus);
+          }
+          break;
+        }
+        if (status === 'FAILED') {
+          throw new Error(`Workspace ${workspaceId} failed before reaching ${waitTargetStatus}`);
+        }
+      } catch (err) {
+        if (debugLogs) {
+          // eslint-disable-next-line no-console
+          console.warn('[real-e2e] waiting for workspace status:', err);
+        }
+      }
+      await sleep(Math.max(pollIntervalMs, 1000));
+    }
+    if (!reachedStatus) {
+      throw new Error(`Timed out waiting for workspace ${workspaceId} to reach status ${waitTargetStatus}`);
+    }
+  } finally {
+    client.close();
+  }
+}
+
 async function provisionWorkspaceIfNeeded() {
   if (process.env.AEGIS_WORKSPACE_ID) {
     return { workspaceId: process.env.AEGIS_WORKSPACE_ID, cleanup: async () => {} };
   }
 
+  const debugLogs = process.env.AEGIS_E2E_DEBUG === '1';
   const { execa } = await import('execa');
 
   const namespace = process.env.AEGIS_WORKLOAD_NAMESPACE
@@ -212,6 +326,7 @@ async function provisionWorkspaceIfNeeded() {
   }
   const token = process.env.AEGIS_TEST_TOKEN;
   const email = process.env.AEGIS_TEST_EMAIL;
+  const clusterId = process.env.AEGIS_TEST_CLUSTER_ID;
   const caPath = process.env.AEGIS_CA_PEM && process.env.AEGIS_CA_PEM.trim() !== ''
     ? process.env.AEGIS_CA_PEM.trim()
     : undefined;
@@ -227,6 +342,103 @@ async function provisionWorkspaceIfNeeded() {
     deny_egress_by_default: process.env.AEGIS_PROJECT_POLICY_DENY_EGRESS === '1',
   };
 
+  const defaultWorkspaceCommand = [
+    '/bin/sh',
+    '-c',
+    `
+set -euo pipefail
+
+log() { printf '[reh] %s\\n' "$1"; }
+
+ensure_tool() {
+  if command -v "$1" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v apk >/dev/null 2>&1; then
+    apk add --no-cache "$1" >/dev/null 2>&1 || true
+  elif command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update >/dev/null 2>&1
+    apt-get install -y "$1" >/dev/null 2>&1 || true
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y "$1" >/dev/null 2>&1 || true
+  fi
+}
+
+ensure_tool curl
+ensure_tool tar
+ensure_tool gzip
+
+WORKDIR="/reh"
+mkdir -p "$WORKDIR"
+
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64) ARCH_SUFFIX="x64" ;;
+  aarch64|arm64) ARCH_SUFFIX="arm64" ;;
+  *)
+    log "unsupported architecture: $ARCH"
+    exit 1
+    ;;
+esac
+
+QUALITY="\${VSCODE_QUALITY:-stable}"
+COMMIT="\${VSCODE_COMMIT:-}"
+if [ -z "$COMMIT" ]; then
+  log "VSCODE_COMMIT not set"
+  exit 1
+fi
+
+TMP_TAR="$(mktemp)"
+PRIMARY_URL="https://vscode.download.prss.microsoft.com/dbazure/download/\${QUALITY}/\${COMMIT}/vscode-server-linux-\${ARCH_SUFFIX}.tar.gz"
+FALLBACK_URL="https://update.code.visualstudio.com/commit/\${COMMIT}/server-linux-\${ARCH_SUFFIX}/\${QUALITY}"
+
+if ! curl -fsSL "$PRIMARY_URL" -o "$TMP_TAR"; then
+  log "primary VS Code server download failed, trying fallback"
+  curl -fsSL "$FALLBACK_URL" -o "$TMP_TAR"
+fi
+
+rm -rf "$WORKDIR/bin/current"
+mkdir -p "$WORKDIR/bin/current"
+tar -xzf "$TMP_TAR" -C "$WORKDIR/bin/current" --strip-components=1
+rm -f "$TMP_TAR"
+
+TOKEN_PATH="$WORKDIR/token"
+echo "token" > "$TOKEN_PATH"
+
+log "Extension host agent started"
+
+SERVER_BIN="code-server"
+if [ "$QUALITY" = "insider" ] || [ "$QUALITY" = "insiders" ]; then
+  SERVER_BIN="code-server-insiders"
+fi
+
+exec "$WORKDIR/bin/current/bin/$SERVER_BIN" \\
+  --host 0.0.0.0 \\
+  --port 11111 \\
+  --telemetry-level off \\
+  --connection-token-file "$TOKEN_PATH" \\
+  --accept-server-license-terms \\
+  --disable-telemetry
+`
+  ];
+
+  const workspaceCommand = (() => {
+    const raw = process.env.AEGIS_TEST_WORKSPACE_COMMAND;
+    if (!raw) {
+      return defaultWorkspaceCommand;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
+        return parsed;
+      }
+    } catch (err) {
+      console.warn('[real-e2e] failed to parse AEGIS_TEST_WORKSPACE_COMMAND; falling back to default', err);
+    }
+    return defaultWorkspaceCommand;
+  })();
+
   await submitWorkspaceViaPlatformApi(workspaceId, {
     grpcAddr,
     token,
@@ -240,8 +452,9 @@ async function provisionWorkspaceIfNeeded() {
     skipTls: skipTlsVerify,
     queue: process.env.AEGIS_TEST_QUEUE || 'default',
     flavor: process.env.AEGIS_TEST_FLAVOR || 'cpu-small',
-    image: process.env.AEGIS_TEST_IMAGE,
-    clusterId: process.env.AEGIS_TEST_CLUSTER_ID,
+    image: process.env.AEGIS_TEST_IMAGE || 'carlossanchez/aegis-workspace-vscode:latest',
+    workspaceCommand,
+    clusterId,
     clusterRegistration: {
       provider: process.env.AEGIS_CLUSTER_PROVIDER || 'aws',
       region: process.env.AEGIS_CLUSTER_REGION || 'us-east-1',
@@ -278,6 +491,10 @@ async function provisionWorkspaceIfNeeded() {
     if (stdout && stdout.trim().length > 0) {
       podsFound = true;
       podName = stdout.trim().split('\n')[0].replace(/^pod\//, '');
+      if (debugLogs) {
+        // eslint-disable-next-line no-console
+        console.log('[real-e2e] workspace pod discovered:', podName);
+      }
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
@@ -332,6 +549,39 @@ async function provisionWorkspaceIfNeeded() {
     if (!logReady) {
       throw new Error('Timed out waiting for workspace VS Code server to start');
     }
+    if (debugLogs) {
+      // eslint-disable-next-line no-console
+      console.log('[real-e2e] workspace log ready detected for pod', podName);
+      try {
+        const { stdout } = await execa('kubectl', [
+          'logs',
+          podName,
+          '-n',
+          namespace,
+          '--tail=200'
+        ]);
+        console.log('---- workspace pod log tail ----');
+        console.log(stdout);
+        console.log('---- end workspace pod log tail ----');
+      } catch (err) {
+        console.warn('[real-e2e] failed to read workspace pod logs:', err);
+      }
+    }
+  }
+
+  await ensureWorkspaceRunning(workspaceId, {
+    grpcAddr,
+    token,
+    email,
+    namespace,
+    clusterId,
+    caPath,
+    skipTls: skipTlsVerify,
+  });
+
+  if (debugLogs) {
+    // eslint-disable-next-line no-console
+    console.log('[real-e2e] workspace status confirmed RUNNING');
   }
 
   process.env.AEGIS_WORKSPACE_ID = workspaceId;
@@ -385,5 +635,30 @@ async function main() {
 
 main().catch((err) => {
   console.error(err);
+  if (process.env.AEGIS_E2E_DEBUG === '1') {
+    const extensionRoot = path.resolve(__dirname, '../../');
+    const renderLog = path.resolve(extensionRoot, '__tests__/logs-real/window1/renderer.log');
+    const mainLog = path.resolve(extensionRoot, '__tests__/logs-real/main.log');
+    const networkLog = path.resolve(extensionRoot, '__tests__/logs-real/window1/network.log');
+    printLogTail(renderLog, 'renderer.log');
+    printLogTail(mainLog, 'main.log');
+    printLogTail(networkLog, 'network.log');
+  }
   process.exit(1);
 });
+
+function printLogTail(filePath, label) {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return;
+    }
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const lines = raw.split(/\r?\n/);
+    const tail = lines.slice(-logTailLines).join('\n');
+    console.log(`---- ${label} (last ${Math.min(lines.length, logTailLines)} lines) ----`);
+    console.log(tail);
+    console.log(`---- end ${label} ----`);
+  } catch (err) {
+    console.warn(`[real-e2e] failed to read ${label}:`, err);
+  }
+}
