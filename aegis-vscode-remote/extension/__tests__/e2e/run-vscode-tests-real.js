@@ -7,6 +7,7 @@ const protoLoader = require('@grpc/proto-loader');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function submitWorkspaceViaPlatformApi(workspaceId, opts) {
+  const debugLogs = process.env.AEGIS_E2E_DEBUG === '1';
   const protoPath = path.resolve(__dirname, '../../proto/aegis_platform.proto');
   const packageDefinition = await protoLoader.load(protoPath, {
     keepCase: true,
@@ -59,20 +60,40 @@ async function submitWorkspaceViaPlatformApi(workspaceId, opts) {
       });
     });
 
+    let projectResp;
     if (opts.projectId) {
-      await callUnary('CreateProject', { project: { id: opts.projectId } });
+      projectResp = await callUnary('CreateProject', {
+        project: {
+          id: opts.projectId,
+          display_name: opts.projectDisplayName,
+          owner_group: opts.projectOwnerGroup,
+          policy: opts.projectPolicy,
+        }
+      });
+      if (debugLogs && projectResp) {
+        // eslint-disable-next-line no-console
+        console.log('Project response:', JSON.stringify(projectResp));
+      }
     }
 
     const flavorName = opts.flavor ?? 'cpu-small';
-    await callUnary('UpsertFlavor', { flavor: { name: flavorName } });
+    const flavorResp = await callUnary('UpsertFlavor', { flavor: { name: flavorName } });
+    if (debugLogs && flavorResp) {
+      // eslint-disable-next-line no-console
+      console.log('Flavor response:', JSON.stringify(flavorResp));
+    }
 
-    await callUnary('UpsertQueue', {
+    const queueResp = await callUnary('UpsertQueue', {
       queue: {
         name: opts.queue ?? 'default',
         project_id: opts.projectId,
         allowed_flavors: [flavorName],
       },
     });
+    if (debugLogs && queueResp) {
+      // eslint-disable-next-line no-console
+      console.log('Queue response:', JSON.stringify(queueResp));
+    }
 
     const workloadPayload = {
       id: workspaceId,
@@ -151,12 +172,25 @@ async function provisionWorkspaceIfNeeded() {
     : undefined;
   const skipTlsVerify = process.env.AEGIS_TLS_SKIP_VERIFY === '1';
 
+  const policyRegions = (process.env.AEGIS_PROJECT_POLICY_REGIONS || 'us-east-1')
+    .split(',')
+    .map((r) => r.trim())
+    .filter((r) => r.length > 0);
+  const projectPolicy = {
+    regions: policyRegions,
+    data_level: process.env.AEGIS_PROJECT_POLICY_DATA_LEVEL || 'il1',
+    deny_egress_by_default: process.env.AEGIS_PROJECT_POLICY_DENY_EGRESS === '1',
+  };
+
   await submitWorkspaceViaPlatformApi(workspaceId, {
     grpcAddr,
     token,
     email,
     namespace,
     projectId,
+    projectDisplayName: process.env.AEGIS_PROJECT_DISPLAY_NAME || 'Cloud E2E',
+    projectOwnerGroup: process.env.AEGIS_PROJECT_OWNER_GROUP || 'aegis-dev',
+    projectPolicy,
     caPath,
     skipTls: skipTlsVerify,
     queue: process.env.AEGIS_TEST_QUEUE || 'default',
