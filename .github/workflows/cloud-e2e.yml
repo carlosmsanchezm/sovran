@@ -310,6 +310,12 @@ jobs:
           AEGIS_CA_PEM: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
         working-directory: aegis-vscode-remote/extension
         run: xvfb-run -a npm run test:e2e:real
+      - name: Dump mocha results on failure
+        if: failure()
+        run: |
+          echo "---- Mocha JUnit report ----"
+          cat aegis-vscode-remote/extension/__tests__/test-results/junit/mocha-e2e-real-results.xml || true
+          echo "---------------------------"
 
   teardown:
     name: Teardown Preview Environment
