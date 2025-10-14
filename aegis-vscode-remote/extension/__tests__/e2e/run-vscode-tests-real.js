@@ -258,7 +258,7 @@ async function provisionWorkspaceIfNeeded() {
   const selector = `aegis.workload/id=${workspaceId}`;
 
   const pollStart = Date.now();
-  const pollTimeoutMs = 60_000;
+  const pollTimeoutMs = Number.parseInt(process.env.AEGIS_WORKSPACE_APPEAR_TIMEOUT_MS || '180000', 10);
   const pollIntervalMs = 2_000;
   let podsFound = false;
   let podName;
