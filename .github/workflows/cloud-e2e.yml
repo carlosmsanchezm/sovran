@@ -248,7 +248,6 @@ jobs:
       AEGIS_PLATFORM_NAMESPACE: ${{ needs.deploy-preview.outputs.preview_namespace }}
       AEGIS_PROJECT_ID: ${{ format('p-cloud-e2e-il1-{0}', github.run_id) }}
       AEGIS_TEST_CLUSTER_ID: ${{ format('aegis-spoke-{0}', needs.deploy-preview.outputs.preview_release) }}
-      NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
       AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
       AEGIS_TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
       AEGIS_E2E_DEBUG: '1'
@@ -307,6 +306,7 @@ jobs:
 
       - name: Run VS Code cloud TLS E2E
         env:
+          NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
           AEGIS_CA_PEM: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
         working-directory: aegis-vscode-remote/extension
         run: xvfb-run -a npm run test:e2e:real
