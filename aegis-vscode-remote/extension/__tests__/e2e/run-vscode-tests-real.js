@@ -5,6 +5,16 @@ const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const parseJson = (value, fallback) => {
+  if (!value) {
+    return fallback;
+  }
+  try {
+    return JSON.parse(value);
+  } catch (err) {
+    return fallback;
+  }
+};
 
 async function submitWorkspaceViaPlatformApi(workspaceId, opts) {
   const debugLogs = process.env.AEGIS_E2E_DEBUG === '1';
@@ -93,6 +103,39 @@ async function submitWorkspaceViaPlatformApi(workspaceId, opts) {
     if (debugLogs && queueResp) {
       // eslint-disable-next-line no-console
       console.log('Queue response:', JSON.stringify(queueResp));
+    }
+
+    if (opts.clusterRegistration && opts.clusterId) {
+      const clusterReq = {
+        cluster_id: opts.clusterId,
+        provider: opts.clusterRegistration.provider || 'aws',
+        region: opts.clusterRegistration.region || 'us-east-1',
+        il_level: opts.clusterRegistration.ilLevel || 'il1',
+        labels: opts.clusterRegistration.labels || {},
+      };
+      const registerResp = await callUnary('RegisterCluster', clusterReq).catch((err) => {
+        if (err && err.code === grpc.status.ALREADY_EXISTS) {
+          return null;
+        }
+        throw err;
+      });
+      if (debugLogs && registerResp) {
+        // eslint-disable-next-line no-console
+        console.log('RegisterCluster response:', JSON.stringify(registerResp));
+      }
+
+      const heartbeatReq = {
+        cluster_id: opts.clusterId,
+        available_flavors: opts.clusterRegistration.availableFlavors || [{ name: flavorName }],
+      };
+      if (typeof opts.clusterRegistration.ttfGpuSecondsP50 === 'number') {
+        heartbeatReq.ttf_gpu_seconds_p50 = opts.clusterRegistration.ttfGpuSecondsP50;
+      }
+      const heartbeatResp = await callUnary('Heartbeat', heartbeatReq);
+      if (debugLogs && heartbeatResp) {
+        // eslint-disable-next-line no-console
+        console.log('Heartbeat response:', JSON.stringify(heartbeatResp));
+      }
     }
 
     const workloadPayload = {
@@ -197,6 +240,18 @@ async function provisionWorkspaceIfNeeded() {
     flavor: process.env.AEGIS_TEST_FLAVOR || 'cpu-small',
     image: process.env.AEGIS_TEST_IMAGE,
     clusterId: process.env.AEGIS_TEST_CLUSTER_ID,
+    clusterRegistration: {
+      provider: process.env.AEGIS_CLUSTER_PROVIDER || 'aws',
+      region: process.env.AEGIS_CLUSTER_REGION || 'us-east-1',
+      ilLevel: process.env.AEGIS_CLUSTER_IL_LEVEL || 'il1',
+      labels: {
+        env: namespace,
+        ...parseJson(process.env.AEGIS_CLUSTER_LABELS, {}),
+      },
+      availableFlavors: [{
+        name: process.env.AEGIS_TEST_FLAVOR || 'cpu-small'
+      }],
+    },
   });
 
   const waitTimeout = process.env.AEGIS_TEST_WORKSPACE_TIMEOUT || '300s';
