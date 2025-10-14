@@ -141,6 +141,7 @@ jobs:
         env:
           HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}
           K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
+          PROXY_CLUSTER_ID: ${{ format('aegis-spoke-{0}', steps.ids.outputs.preview_release) }}
           TERRAFORM_DIR: infra/terraform
         run: |
           set -euo pipefail

@@ -137,6 +137,16 @@ kubectl -n "${K8S_NAMESPACE}" set env deployment/"${HELM_RELEASE}-platform-api" 
 kubectl -n "${K8S_NAMESPACE}" rollout status deployment/"${HELM_RELEASE}-platform-api" --timeout=2m
 log "  platform-api rollout complete with updated proxy base URL"
 
+if [[ -n "${PROXY_CLUSTER_ID:-}" ]]; then
+  log "Ensuring proxy advertises cluster ${PROXY_CLUSTER_ID}"
+  kubectl -n "${K8S_NAMESPACE}" set env deployment/"${HELM_RELEASE}-proxy" \
+    AEGIS_PROXY_CLUSTER="${PROXY_CLUSTER_ID}" --overwrite >/dev/null
+  kubectl -n "${K8S_NAMESPACE}" rollout status deployment/"${HELM_RELEASE}-proxy" --timeout=2m
+  log "  proxy rollout complete with updated cluster ID"
+else
+  log "PROXY_CLUSTER_ID not set; skipping proxy cluster env update"
+fi
+
 log "Resolving LoadBalancer IPs for local /etc/hosts overrides"
 PLATFORM_IP="$(pick_reachable_ip "${PLATFORM_LB}" 8081)"
 PROXY_IP="$(pick_reachable_ip "${PROXY_LB}" 8080)"
