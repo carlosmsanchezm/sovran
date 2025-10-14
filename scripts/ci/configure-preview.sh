@@ -118,5 +118,9 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "grpc_host=${GRPC_HOST}"
     echo "proxy_hostname=${PROXY_HOSTNAME}"
     echo "grpc_ca=${CA_BUNDLE}"
+    echo "platform_dns=${PLATFORM_DNS}"
+    echo "platform_ip=${PLATFORM_IP}"
+    echo "proxy_dns=${PROXY_DNS}"
+    echo "proxy_ip=${PROXY_IP}"
   } >> "${GITHUB_OUTPUT}"
 fi
