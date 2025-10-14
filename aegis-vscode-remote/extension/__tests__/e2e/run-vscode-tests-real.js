@@ -282,6 +282,21 @@ async function provisionWorkspaceIfNeeded() {
   }
 
   if (!podsFound) {
+    try {
+      const { stdout: workloads } = await execa('kubectl', [
+        'get',
+        'aegisworkloads.aegis.yourorg.dev',
+        '-n',
+        namespace,
+        '-o',
+        'yaml'
+      ]);
+      // eslint-disable-next-line no-console
+      console.warn('AegisWorkloads snapshot:\n', workloads);
+    } catch (snapErr) {
+      // eslint-disable-next-line no-console
+      console.warn('Failed to get AegisWorkloads snapshot', snapErr);
+    }
     throw new Error(`Timed out waiting for pods with selector ${selector} to appear`);
   }
 
