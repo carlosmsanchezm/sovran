@@ -156,6 +156,44 @@ jobs:
           name: tls-ca-bundle
           path: ${{ steps.configure.outputs.grpc_ca }}
 
+      - name: Seed platform control plane
+        env:
+          GRPC_ADDR: ${{ steps.configure.outputs.grpc_addr }}
+          GRPC_HOST: ${{ steps.configure.outputs.grpc_host }}
+          GRPC_CA: ${{ steps.configure.outputs.grpc_ca }}
+          PLATFORM_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
+          PROJECT_ID: p-cloud-e2e
+          CLUSTER_ID: cloud-e2e
+          TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
+          TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
+        run: |
+          set -euo pipefail
+          HOST="${GRPC_ADDR}"
+          CACERT="${GRPC_CA}"
+          AUTH="authorization: Bearer ${TEST_TOKEN}"
+          USER_HDR="x-aegis-user: ${TEST_EMAIL}"
+          NS_HDR="x-aegis-namespace: ${PLATFORM_NAMESPACE}"
+
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+            -d '{"project":{"id":"'"${PROJECT_ID}"'","displayName":"Cloud E2E","ownerGroup":"aegis-dev"}}' \
+            "${HOST}" aegis.v1.AegisPlatform/CreateProject || true
+
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+            -d '{"flavor":{"name":"cpu-small"}}' \
+            "${HOST}" aegis.v1.AegisPlatform/UpsertFlavor || true
+
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+            -d '{"queue":{"name":"default","projectId":"'"${PROJECT_ID}"'","priorityTier":"dev","allowedFlavors":["cpu-small"],"defaultMaxDurationSeconds":3600}}' \
+            "${HOST}" aegis.v1.AegisPlatform/UpsertQueue || true
+
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+            -d '{"clusterId":"'"${CLUSTER_ID}"'","provider":"aws","region":"us-east-1","ilLevel":"il1","labels":{"env":"cloud-e2e"}}' \
+            "${HOST}" aegis.v1.AegisPlatform/RegisterCluster || true
+
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+            -d '{"clusterId":"'"${CLUSTER_ID}"'","availableFlavors":[{"name":"cpu-small"}]}' \
+            "${HOST}" aegis.v1.AegisPlatform/Heartbeat || true
+
   extension-e2e:
     name: Extension TLS E2E
     runs-on: ubuntu-latest
