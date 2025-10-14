@@ -162,7 +162,7 @@ jobs:
           GRPC_HOST: ${{ steps.configure.outputs.grpc_host }}
           GRPC_CA: ${{ steps.configure.outputs.grpc_ca }}
           PLATFORM_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
-          PROJECT_ID: p-cloud-e2e
+          PROJECT_ID: p-cloud-e2e-il1
           CLUSTER_ID: cloud-e2e
           TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
           TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
@@ -202,7 +202,7 @@ jobs:
     env:
       AEGIS_GRPC_ADDR: ${{ needs.deploy-preview.outputs.grpc_addr }}
       AEGIS_PLATFORM_NAMESPACE: ${{ needs.deploy-preview.outputs.preview_namespace }}
-      AEGIS_PROJECT_ID: p-cloud-e2e
+      AEGIS_PROJECT_ID: p-cloud-e2e-il1
       NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
       AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
       AEGIS_TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
