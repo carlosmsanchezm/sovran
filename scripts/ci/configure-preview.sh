@@ -130,6 +130,13 @@ log "Route53 updated:"
 log "  ${PLATFORM_DNS} → ${PLATFORM_LB}"
 log "  ${PROXY_DNS} → ${PROXY_LB}"
 
+TARGET_PROXY_BASE="wss://${PROXY_DNS}:8080"
+log "Ensuring platform-api uses ${TARGET_PROXY_BASE} for proxy tickets"
+kubectl -n "${K8S_NAMESPACE}" set env deployment/"${HELM_RELEASE}-platform-api" \
+  AEGIS_PROXY_BASE_URL="${TARGET_PROXY_BASE}" --overwrite >/dev/null
+kubectl -n "${K8S_NAMESPACE}" rollout status deployment/"${HELM_RELEASE}-platform-api" --timeout=2m
+log "  platform-api rollout complete with updated proxy base URL"
+
 log "Resolving LoadBalancer IPs for local /etc/hosts overrides"
 PLATFORM_IP="$(pick_reachable_ip "${PLATFORM_LB}" 8081)"
 PROXY_IP="$(pick_reachable_ip "${PROXY_LB}" 8080)"
