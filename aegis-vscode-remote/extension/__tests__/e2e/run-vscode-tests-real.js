@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { runTests } = require('@vscode/test-electron');
+const { runTests, downloadAndUnzipVSCode } = require('@vscode/test-electron');
 const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
 
@@ -17,6 +17,35 @@ const parseJson = (value, fallback) => {
     return fallback;
   }
 };
+
+async function resolveVsCodeCommit(quality) {
+  const debugLogs = process.env.AEGIS_E2E_DEBUG === '1';
+  try {
+    const vsRoot = await downloadAndUnzipVSCode(quality);
+    const candidates = [
+      path.join(vsRoot, 'resources', 'app', 'product.json'),
+      path.join(vsRoot, 'Contents', 'Resources', 'app', 'product.json'),
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        const product = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+        if (product?.commit) {
+          if (debugLogs) {
+            // eslint-disable-next-line no-console
+            console.log('[real-e2e] resolved VS Code commit', product.commit);
+          }
+          return product.commit;
+        }
+      }
+    }
+  } catch (err) {
+    if (debugLogs) {
+      // eslint-disable-next-line no-console
+      console.warn('[real-e2e] failed to resolve VS Code commit:', err);
+    }
+  }
+  return undefined;
+}
 
 async function submitWorkspaceViaPlatformApi(workspaceId, opts) {
   const debugLogs = process.env.AEGIS_E2E_DEBUG === '1';
@@ -148,6 +177,7 @@ async function submitWorkspaceViaPlatformApi(workspaceId, opts) {
         interactive: true,
         ports: [11111],
         command: opts.workspaceCommand,
+        ...(opts.workspaceEnv ? { env: opts.workspaceEnv } : {}),
       },
     };
     if (opts.image) {
@@ -342,6 +372,12 @@ async function provisionWorkspaceIfNeeded() {
     deny_egress_by_default: process.env.AEGIS_PROJECT_POLICY_DENY_EGRESS === '1',
   };
 
+  const vsQuality = (process.env.VSCODE_QUALITY || 'stable').toLowerCase();
+  let vsCommit = process.env.VSCODE_COMMIT;
+  if (!vsCommit) {
+    vsCommit = await resolveVsCodeCommit(vsQuality);
+  }
+
   const defaultWorkspaceCommand = [
     '/bin/sh',
     '-c',
@@ -384,14 +420,15 @@ esac
 
 QUALITY="\${VSCODE_QUALITY:-stable}"
 COMMIT="\${VSCODE_COMMIT:-}"
-if [ -z "$COMMIT" ]; then
-  log "VSCODE_COMMIT not set"
-  exit 1
-fi
-
 TMP_TAR="$(mktemp)"
-PRIMARY_URL="https://vscode.download.prss.microsoft.com/dbazure/download/\${QUALITY}/\${COMMIT}/vscode-server-linux-\${ARCH_SUFFIX}.tar.gz"
-FALLBACK_URL="https://update.code.visualstudio.com/commit/\${COMMIT}/server-linux-\${ARCH_SUFFIX}/\${QUALITY}"
+if [ -n "$COMMIT" ]; then
+  PRIMARY_URL="https://vscode.download.prss.microsoft.com/dbazure/download/\${QUALITY}/\${COMMIT}/vscode-server-linux-\${ARCH_SUFFIX}.tar.gz"
+  FALLBACK_URL="https://update.code.visualstudio.com/commit/\${COMMIT}/server-linux-\${ARCH_SUFFIX}/\${QUALITY}"
+else
+  log "VSCODE_COMMIT not set; using latest build for QUALITY=\${QUALITY}"
+  PRIMARY_URL="https://update.code.visualstudio.com/latest/server-linux-\${ARCH_SUFFIX}/\${QUALITY}"
+  FALLBACK_URL="\${PRIMARY_URL}"
+fi
 
 if ! curl -fsSL "$PRIMARY_URL" -o "$TMP_TAR"; then
   log "primary VS Code server download failed, trying fallback"
@@ -454,6 +491,10 @@ exec "$WORKDIR/bin/current/bin/$SERVER_BIN" \\
     flavor: process.env.AEGIS_TEST_FLAVOR || 'cpu-small',
     image: process.env.AEGIS_TEST_IMAGE || 'carlossanchez/aegis-workspace-vscode:latest',
     workspaceCommand,
+    workspaceEnv: {
+      VSCODE_QUALITY: vsQuality,
+      ...(vsCommit ? { VSCODE_COMMIT: vsCommit } : {}),
+    },
     clusterId,
     clusterRegistration: {
       provider: process.env.AEGIS_CLUSTER_PROVIDER || 'aws',
@@ -513,17 +554,35 @@ exec "$WORKDIR/bin/current/bin/$SERVER_BIN" \\
     throw new Error(`Timed out waiting for pods with selector ${selector} to appear`);
   }
 
-  await execa('kubectl', [
-    'wait',
-    '--for=condition=Ready',
-    'pod',
-    '-l',
-    selector,
-    '-n',
-    namespace,
-    '--timeout',
-    waitTimeout
-  ], { stdout: 'inherit', stderr: 'inherit' });
+  try {
+    await execa('kubectl', [
+      'wait',
+      '--for=condition=Ready',
+      'pod',
+      '-l',
+      selector,
+      '-n',
+      namespace,
+      '--timeout',
+      waitTimeout
+    ], { stdout: 'inherit', stderr: 'inherit' });
+  } catch (err) {
+    if (podName) {
+      try {
+        await execa('kubectl', ['get', 'pod', podName, '-n', namespace, '-o', 'wide'], { stdout: 'inherit', stderr: 'inherit' });
+      } catch {}
+      try {
+        await execa('kubectl', ['describe', 'pod', podName, '-n', namespace], { stdout: 'inherit', stderr: 'inherit' });
+      } catch {}
+      try {
+        await execa('kubectl', ['logs', podName, '-n', namespace, '--tail=200', '--timestamps'], { stdout: 'inherit', stderr: 'inherit' });
+      } catch {}
+      try {
+        await execa('kubectl', ['logs', podName, '-n', namespace, '--previous', '--tail=200', '--timestamps'], { stdout: 'inherit', stderr: 'inherit' });
+      } catch {}
+    }
+    throw err;
+  }
 
   if (podName) {
     const deadline = Date.now() + 60_000;
