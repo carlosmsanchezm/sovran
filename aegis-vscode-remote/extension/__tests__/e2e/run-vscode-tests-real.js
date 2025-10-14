@@ -4,6 +4,8 @@ const { runTests } = require('@vscode/test-electron');
 const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function submitWorkspaceViaPlatformApi(workspaceId, opts) {
   const protoPath = path.resolve(__dirname, '../../proto/aegis_platform.proto');
   const packageDefinition = await protoLoader.load(protoPath, {
@@ -89,15 +91,35 @@ async function submitWorkspaceViaPlatformApi(workspaceId, opts) {
       workloadPayload.cluster_id = opts.clusterId;
     }
 
-    await new Promise((resolve, reject) => {
-      client.SubmitWorkload({ workload: workloadPayload }, metadata, (err) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve();
+    const maxAttempts = Number.parseInt(process.env.AEGIS_WORKSPACE_SUBMIT_ATTEMPTS || '5', 10);
+    const retryDelayMs = Number.parseInt(process.env.AEGIS_WORKSPACE_SUBMIT_DELAY_MS || '5000', 10);
+    let attempt = 0;
+    for (;;) {
+      attempt += 1;
+      try {
+        await new Promise((resolve, reject) => {
+          client.SubmitWorkload({ workload: workloadPayload }, metadata, (err) => {
+            if (err) {
+              reject(err);
+            } else {
+              resolve();
+            }
+          });
+        });
+        break;
+      } catch (err) {
+        const isClusterClientError = err
+          && err.code === grpc.status.INTERNAL
+          && typeof err.details === 'string'
+          && err.details.includes('failed to resolve cluster client');
+        if (!isClusterClientError || attempt >= maxAttempts) {
+          throw err;
         }
-      });
-    });
+        const delay = Math.max(retryDelayMs, 1000);
+        // give the agent time to register with the control plane
+        await sleep(delay);
+      }
+    }
   } finally {
     client.close();
   }
