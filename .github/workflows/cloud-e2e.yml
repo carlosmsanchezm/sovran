@@ -199,6 +199,7 @@ jobs:
       AEGIS_GRPC_ADDR: ${{ needs.deploy-preview.outputs.grpc_addr }}
       AEGIS_PLATFORM_NAMESPACE: ${{ needs.deploy-preview.outputs.preview_namespace }}
       AEGIS_PROJECT_ID: p-cloud-e2e-il1
+      AEGIS_TEST_CLUSTER_ID: ${{ needs.deploy-preview.outputs.preview_id }}
       NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
       AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
       AEGIS_TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
@@ -225,6 +226,18 @@ jobs:
             sudo sed -i.bak "/${{ needs.deploy-preview.outputs.proxy_hostname }}/d" /etc/hosts
             echo "${{ needs.deploy-preview.outputs.proxy_ip }} ${{ needs.deploy-preview.outputs.proxy_hostname }}" | sudo tee -a /etc/hosts
           fi
+
+      - name: Configure AWS credentials for EKS access
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig for preview cluster
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region "${AWS_REGION}" --name "aegis-spoke-${{ needs.deploy-preview.outputs.preview_release }}"
 
       - name: Install dependencies
         working-directory: aegis-vscode-remote/extension
