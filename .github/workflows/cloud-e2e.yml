@@ -155,24 +155,24 @@ jobs:
           tmpdir=$(mktemp -d)
           tmpl="${tmpdir}/kubeconfig.tmpl"
           cat <<'EOF' > "${tmpl}"
-apiVersion: v1
-clusters:
-- cluster:
-    certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-    server: https://kubernetes.default.svc
-  name: ${CLUSTER_ID}
-contexts:
-- context:
-    cluster: ${CLUSTER_ID}
-    user: ${CLUSTER_ID}
-  name: ${CLUSTER_ID}
-current-context: ${CLUSTER_ID}
-kind: Config
-users:
-- name: ${CLUSTER_ID}
-  user:
-    tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
-EOF
+          apiVersion: v1
+          clusters:
+          - cluster:
+              certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              server: https://kubernetes.default.svc
+            name: ${CLUSTER_ID}
+          contexts:
+          - context:
+              cluster: ${CLUSTER_ID}
+              user: ${CLUSTER_ID}
+            name: ${CLUSTER_ID}
+          current-context: ${CLUSTER_ID}
+          kind: Config
+          users:
+          - name: ${CLUSTER_ID}
+            user:
+              tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+          EOF
           tmpfile="${tmpdir}/kubeconfig"
           envsubst '${CLUSTER_ID}' < "${tmpl}" > "${tmpfile}"
           kubectl create secret generic aegis-kubeconfigs \
