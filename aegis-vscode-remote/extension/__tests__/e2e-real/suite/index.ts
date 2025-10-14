@@ -39,7 +39,7 @@ function buildWebSocketUrl(rawProxyUrl: string, workspaceId: string): string {
 }
 
 suite('Aegis REAL backend E2E', function () {
-  this.timeout(120_000);
+  this.timeout(240_000);
 
   test('sign-in → ticket → heartbeat over real proxy', async () => {
     const email = process.env.AEGIS_TEST_EMAIL ?? '';
