@@ -29,6 +29,8 @@ jobs:
       grpc_host: ${{ steps.configure.outputs.grpc_host }}
       proxy_hostname: ${{ steps.configure.outputs.proxy_hostname }}
       grpc_ca: ${{ steps.configure.outputs.grpc_ca }}
+      platform_ip: ${{ steps.configure.outputs.platform_ip }}
+      proxy_ip: ${{ steps.configure.outputs.proxy_ip }}
     steps:
       - name: Checkout extension repository
         uses: actions/checkout@v4
@@ -162,7 +164,7 @@ jobs:
     env:
       AEGIS_GRPC_ADDR: ${{ needs.deploy-preview.outputs.grpc_addr }}
       AEGIS_PLATFORM_NAMESPACE: ${{ needs.deploy-preview.outputs.preview_namespace }}
-      AEGIS_PROJECT_ID: ${{ format('p-ext-%s', github.run_id) }}
+      AEGIS_PROJECT_ID: p-cloud-e2e
       NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
       AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
       AEGIS_TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
@@ -180,6 +182,15 @@ jobs:
         with:
           name: tls-ca-bundle
           path: .tls
+
+      - name: Add hosts entries for platform/proxy
+        run: |
+          sudo sed -i.bak "/${{ needs.deploy-preview.outputs.grpc_host }}/d" /etc/hosts
+          echo "${{ needs.deploy-preview.outputs.platform_ip }} ${{ needs.deploy-preview.outputs.grpc_host }}" | sudo tee -a /etc/hosts
+          if [[ -n "${{ needs.deploy-preview.outputs.proxy_hostname }}" && -n "${{ needs.deploy-preview.outputs.proxy_ip }}" ]]; then
+            sudo sed -i.bak "/${{ needs.deploy-preview.outputs.proxy_hostname }}/d" /etc/hosts
+            echo "${{ needs.deploy-preview.outputs.proxy_ip }} ${{ needs.deploy-preview.outputs.proxy_hostname }}" | sudo tee -a /etc/hosts
+          fi
 
       - name: Install dependencies
         working-directory: aegis-vscode-remote/extension
