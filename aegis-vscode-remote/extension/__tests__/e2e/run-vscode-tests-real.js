@@ -382,7 +382,9 @@ async function provisionWorkspaceIfNeeded() {
     '/bin/sh',
     '-c',
     `
-set -euo pipefail
+set -euo
+
+(set -o pipefail >/dev/null 2>&1) || true
 
 log() { printf '[reh] %s\\n' "$1"; }
 
