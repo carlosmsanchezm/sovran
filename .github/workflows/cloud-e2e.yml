@@ -63,8 +63,7 @@ jobs:
       - name: Derive preview identifiers
         id: ids
         run: |
-          hash=$(echo -n "${GITHUB_RUN_ID}" | shasum | cut -c1-6)
-          preview_id="ext-${hash}"
+          preview_id="cloud-e2e"
           echo "preview_id=${preview_id}" >>"${GITHUB_OUTPUT}"
           echo "preview_namespace=${preview_id}" >>"${GITHUB_OUTPUT}"
           echo "preview_release=${preview_id}" >>"${GITHUB_OUTPUT}"
@@ -198,7 +197,7 @@ jobs:
 
   teardown:
     name: Teardown Preview Environment
-    if: always()
+    if: ${{ false }}
     runs-on: ubuntu-latest
     needs: deploy-preview
     env:
