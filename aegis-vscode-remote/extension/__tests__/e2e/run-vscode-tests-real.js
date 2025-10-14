@@ -489,7 +489,7 @@ exec "$WORKDIR/bin/current/bin/$SERVER_BIN" \\
     skipTls: skipTlsVerify,
     queue: process.env.AEGIS_TEST_QUEUE || 'default',
     flavor: process.env.AEGIS_TEST_FLAVOR || 'cpu-small',
-    image: process.env.AEGIS_TEST_IMAGE || 'ubuntu:22.04',
+    image: process.env.AEGIS_TEST_IMAGE || '567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/workspace-vscode:latest',
     workspaceCommand,
     workspaceEnv: {
       VSCODE_QUALITY: vsQuality,
