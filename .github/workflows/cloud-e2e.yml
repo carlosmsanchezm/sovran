@@ -175,7 +175,7 @@ jobs:
           NS_HDR="x-aegis-namespace: ${PLATFORM_NAMESPACE}"
 
           grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
-            -d '{"project":{"id":"'"${PROJECT_ID}"'","displayName":"Cloud E2E","ownerGroup":"aegis-dev"}}' \
+            -d '{"project":{"id":"'"${PROJECT_ID}"'","displayName":"Cloud E2E","ownerGroup":"aegis-dev","policy":{"regions":["us-east-1"],"dataLevel":"il1","denyEgressByDefault":false}}}' \
             "${HOST}" aegis.v1.AegisPlatform/CreateProject || true
 
           grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
