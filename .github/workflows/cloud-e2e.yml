@@ -234,6 +234,9 @@ jobs:
           echo
           echo "== AegisWorkloads in ${K8S_NAMESPACE} =="
           kubectl get aegisworkloads.aegis.yourorg.dev -n "${K8S_NAMESPACE}" || true
+          echo
+          echo "== AegisWorkloads across namespaces =="
+          kubectl get aegisworkloads.aegis.yourorg.dev -A || true
 
   extension-e2e:
     name: Extension TLS E2E
