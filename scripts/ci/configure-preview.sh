@@ -30,6 +30,11 @@ need kubectl
 need terraform
 need dig
 need timeout
+
+log() {
+  printf '[configure-preview] %s\n' "$*" >&2
+}
+
 check_tcp() {
   local ip="$1"
   local port="$2"
@@ -43,19 +48,35 @@ check_tcp() {
 pick_reachable_ip() {
   local host="$1"
   local port="$2"
-  local ips
-  ips=$(dig +short "$host" | sort -u)
-  for ip in $ips; do
-    if [[ -n "$ip" ]] && check_tcp "$ip" "$port"; then
-      echo "$ip"
-      return 0
+  local attempts="${3:-20}"
+  local delay="${4:-3}"
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    local ips
+    ips=$(dig +short "$host" | sort -u)
+    if [[ -z "${ips}" ]]; then
+      log "  Attempt ${attempt}/${attempts}: dig returned no IPs for ${host}"
+    fi
+    for ip in $ips; do
+      if [[ -z "${ip}" ]]; then
+        continue
+      fi
+      if check_tcp "$ip" "$port"; then
+        if [[ "${attempt}" -gt 1 ]]; then
+          log "  Found reachable IP ${ip} for ${host}:${port} on attempt ${attempt}"
+        fi
+        echo "$ip"
+        return 0
+      fi
+      log "  Attempt ${attempt}/${attempts}: ${ip}:${port} not reachable yet"
+    done
+    if [[ "${attempt}" -lt "${attempts}" ]]; then
+      sleep "${delay}"
     fi
   done
-  echo ""
-}
 
-log() {
-  printf '[configure-preview] %s\n' "$*" >&2
+  log "  Exhausted ${attempts} attempts without finding reachable IP for ${host}:${port}"
+  echo ""
 }
 
 wait_for_lb() {
