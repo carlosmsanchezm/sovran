@@ -139,6 +139,11 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y jq dnsutils
+          GRPCURL_VERSION=1.8.9
+          curl -sSL "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin grpcurl
+          sudo chmod +x /usr/local/bin/grpcurl
+          grpcurl --version
 
       - name: Configure preview endpoints
         id: configure
