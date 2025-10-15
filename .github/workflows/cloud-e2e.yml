@@ -19,8 +19,6 @@ jobs:
     name: Deploy Preview Environment
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    env:
-      INFRA_REPO_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
     outputs:
       preview_id: ${{ steps.ids.outputs.preview_id }}
       preview_namespace: ${{ steps.ids.outputs.preview_namespace }}
@@ -34,33 +32,6 @@ jobs:
     steps:
       - name: Checkout extension repository
         uses: actions/checkout@v4
-
-      - name: Verify infra repository access
-        if: env.INFRA_REPO_TOKEN != ''
-        run: |
-          set -euo pipefail
-          status=$(curl -sS -o /tmp/infra_repo.json -w "%{http_code}" \
-            -H "Authorization: token ${INFRA_REPO_TOKEN}" \
-            https://api.github.com/repos/carlosmsanchezm/aegis)
-          cat /tmp/infra_repo.json
-          if [[ "$status" != "200" ]]; then
-            echo "::error::Unable to access repository carlosmsanchezm/aegis (HTTP ${status}). Ensure the token has repo scope."
-            exit 1
-          fi
-
-      - name: Checkout infrastructure repository
-        if: env.INFRA_REPO_TOKEN != ''
-        uses: actions/checkout@v4
-        with:
-          repository: carlosmsanchezm/aegis
-          path: infra
-          token: ${{ env.INFRA_REPO_TOKEN }}
-
-      - name: Fail if infrastructure repository token is missing
-        if: env.INFRA_REPO_TOKEN == ''
-        run: |
-          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlosmsanchezm/aegis."
-          exit 1
 
       - name: Derive preview identifiers
         id: ids
@@ -83,7 +54,7 @@ jobs:
           terraform_wrapper: false
 
       - name: Prepare Terraform state
-        working-directory: infra/terraform
+        working-directory: cloud-terraform/terraform
         run: |
           set -euo pipefail
           export TF_IN_AUTOMATION=1
@@ -102,7 +73,7 @@ jobs:
           terraform workspace select "${TF_WS}"
           echo "Using Terraform workspace: ${TF_WS} (environment ${TF_ENV})"
       - name: Terraform apply infrastructure
-        working-directory: infra/terraform
+        working-directory: cloud-terraform/terraform
         run: |
           set -euo pipefail
           TF_WS="${{ steps.ids.outputs.preview_id }}"
@@ -112,7 +83,7 @@ jobs:
           echo "TF_CLI_ARGS_output=-state=$(pwd)/terraform.tfstate" >> "$GITHUB_ENV"
 
       - name: Deploy control plane via Helm
-        working-directory: infra
+        working-directory: cloud-terraform
         env:
           HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}
           K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
@@ -142,7 +113,7 @@ jobs:
           HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}
           K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
           PROXY_CLUSTER_ID: ${{ format('aegis-spoke-{0}', steps.ids.outputs.preview_release) }}
-          TERRAFORM_DIR: infra/terraform
+          TERRAFORM_DIR: cloud-terraform/terraform
         run: |
           set -euo pipefail
           ./scripts/ci/configure-preview.sh
@@ -325,39 +296,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: deploy-preview
     env:
-      INFRA_REPO_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
       PREVIEW_ID: ${{ needs.deploy-preview.outputs.preview_id }}
       TF_VAR_environment: ${{ needs.deploy-preview.outputs.preview_release }}
     steps:
       - name: Checkout extension repository
         uses: actions/checkout@v4
-
-      - name: Verify infra repository access
-        if: env.INFRA_REPO_TOKEN != ''
-        run: |
-          set -euo pipefail
-          status=$(curl -sS -o /tmp/infra_repo.json -w "%{http_code}" \
-            -H "Authorization: token ${INFRA_REPO_TOKEN}" \
-            https://api.github.com/repos/carlosmsanchezm/aegis)
-          cat /tmp/infra_repo.json
-          if [[ "$status" != "200" ]]; then
-            echo "::error::Unable to access repository carlosmsanchezm/aegis (HTTP ${status}). Ensure the token has repo scope."
-            exit 1
-          fi
-
-      - name: Checkout infrastructure repository
-        if: env.INFRA_REPO_TOKEN != ''
-        uses: actions/checkout@v4
-        with:
-          repository: carlosmsanchezm/aegis
-          path: infra
-          token: ${{ env.INFRA_REPO_TOKEN }}
-
-      - name: Fail if infrastructure repository token is missing
-        if: env.INFRA_REPO_TOKEN == ''
-        run: |
-          echo "::error::Set the INFRA_REPO_TOKEN secret with a Personal Access Token that can read carlosmsanchezm/aegis."
-          exit 1
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -372,7 +315,7 @@ jobs:
           terraform_wrapper: false
 
       - name: Terraform destroy
-        working-directory: infra/terraform
+        working-directory: cloud-terraform/terraform
         run: |
           set -euo pipefail
           terraform init -backend-config=backend.hcl -input=false

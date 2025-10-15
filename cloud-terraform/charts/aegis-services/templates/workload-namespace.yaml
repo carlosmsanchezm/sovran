@@ -1,0 +1,14 @@
+{{- if .Values.platformApi.enabled }}
+{{- if .Values.platformApi.targetNamespace }}
+---
+# Namespace for running workloads
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.platformApi.targetNamespace }}
+  labels:
+    {{- include "aegis-services.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workloads
+    aegis.yourorg.dev/managed-by: platform-api
+{{- end }}
+{{- end }}

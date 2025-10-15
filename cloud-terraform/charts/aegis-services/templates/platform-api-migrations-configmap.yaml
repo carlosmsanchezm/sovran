@@ -1,0 +1,25 @@
+{{- $m := .Values.platformApi.migrations -}}
+{{- if and .Values.platformApi.enabled $m $m.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aegis-services.platformApi.fullname" . }}-migrations
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aegis-services.labels" . | nindent 4 }}
+    app.kubernetes.io/component: platform-api
+    aegis.yourorg.dev/component: migrations
+  annotations:
+    aegis.yourorg.dev/migrations-version: "{{ default "unknown" .Chart.AppVersion }}"
+data:
+{{- $files := .Files.Glob "files/platform-api/migrations/*" }}
+{{- if not $files }}
+  0001_placeholder.sql: |
+    -- No migrations bundled with this chart.
+{{- else }}
+{{- range $path, $file := $files }}
+  {{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}

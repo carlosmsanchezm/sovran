@@ -1,0 +1,4 @@
+# Overrides for cloud / ingress-terminated TLS deployments.
+proxy:
+  tls:
+    terminateAtIngress: true

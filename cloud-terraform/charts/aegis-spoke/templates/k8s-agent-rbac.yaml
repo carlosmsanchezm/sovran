@@ -1,0 +1,74 @@
+{{- if .Values.rbac.create }}
+{{- if .Values.rbac.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.rbac.serviceAccount.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aegis-spoke.labels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-agent
+---
+{{- end }}
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "aegis-spoke.k8sAgent.fullname" . }}-manager-role
+  labels:
+    {{- include "aegis-spoke.labels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-agent
+rules:
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create","patch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get","list","watch"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["create","delete","get","list","patch","update","watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get","list","watch"]
+- apiGroups: ["aegis.yourorg.dev"]
+  resources: ["aegisworkloads"]
+  verbs: ["create","delete","get","list","patch","update","watch"]
+- apiGroups: ["aegis.yourorg.dev"]
+  resources: ["aegisworkloads/finalizers"]
+  verbs: ["update"]
+- apiGroups: ["aegis.yourorg.dev"]
+  resources: ["aegisworkloads/status"]
+  verbs: ["get","patch","update"]
+- apiGroups: ["batch"]
+  resources: ["jobs","jobs/status"]
+  verbs: ["create","delete","get","list","patch","update","watch"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["create","delete","get","list","patch","update","watch"]
+- apiGroups: ["kubeflow.org"]
+  resources: ["pytorchjobs","pytorchjobs/status"]
+  verbs: ["create","delete","get","list","patch","update","watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["create","delete","get","list","patch","update","watch"]
+- apiGroups: ["training.kubeflow.org"]
+  resources: ["trainjobs","trainjobs/status"]
+  verbs: ["create","delete","get","list","patch","update","watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "aegis-spoke.k8sAgent.fullname" . }}-manager-rolebinding
+  labels:
+    {{- include "aegis-spoke.labels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "aegis-spoke.k8sAgent.fullname" . }}-manager-role
+subjects:
+- kind: ServiceAccount
+  name: {{ .Values.rbac.serviceAccount.name }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}

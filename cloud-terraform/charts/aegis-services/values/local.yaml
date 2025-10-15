@@ -1,0 +1,158 @@
+# Local development values for aegis-services
+# This configuration is optimized for local development environments
+# such as minikube, kind, or Docker Desktop Kubernetes
+
+#################################################################
+# Platform API Configuration - Local
+#################################################################
+platformApi:
+  enabled: true
+  replicaCount: 1
+  serviceAccountName: aegis-platform-api
+
+  image:
+    repository: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/platform-api
+    tag: "latest"
+    pullPolicy: IfNotPresent  # Use local images if available
+
+  service:
+    type: ClusterIP  # Use port-forward for local access
+    grpcPort: 8081
+    httpPort: 8080
+
+  ingress:
+    enabled: false  # Not needed for local Docker Desktop
+
+  # Local development environment variables
+  env:
+    LOG_LEVEL: "debug"
+    AEGIS_PROXY_EXPECTED_AUDIENCE: "aegis-proxy"
+    AUTH_STATIC_TOKEN: "supersecret"
+    AUTH_STATIC_SUBJECT: "dev-user@example.com"
+    AEGIS_STORE_BACKEND: "memory"
+
+  tls:
+    enabled: false
+
+  # Local kubeconfig directory
+  kubeConfigsDir: "/tmp/kubeconfigs"
+  targetNamespace: "aegis-workloads-local"
+  clusters:
+    dev-local:
+      inCluster: true
+
+  securityContext: null
+  containerSecurityContext:
+    runAsNonRoot: false
+    runAsUser: 0
+    readOnlyRootFilesystem: false
+    allowPrivilegeEscalation: true
+
+
+  # Resource constraints for local development
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+
+  # Disable health probes for local development (endpoints not implemented yet)
+  livenessProbe: null
+  readinessProbe: null
+  volumeMounts:
+    - name: kubeconfigs
+      mountPath: /tmp/kubeconfigs
+      readOnly: true
+  volumes:
+    - name: kubeconfigs
+      secret:
+        secretName: aegis-kubeconfigs
+
+#################################################################
+# Proxy Configuration - Local
+#################################################################
+proxy:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/proxy
+    tag: "latest"
+    pullPolicy: IfNotPresent  # Use local images if available
+
+  service:
+    type: ClusterIP  # Use port-forward for local access
+    port: 8085
+
+  ingress:
+    enabled: false  # Not needed for local Docker Desktop
+
+  # Local development JWT secret (32+ chars) - must match Platform API
+  jwtSecret: "a-very-secret-key-for-local-dev-must-be-32-chars"
+  expectedAudience: "aegis-proxy"
+  allowedSuffix: ".svc.cluster.local"
+  publicHost: "proxy.localtest.me"
+
+  tls:
+    enabled: true
+    cert: |
+      -----BEGIN CERTIFICATE-----
+      MIIDCTCCAfGgAwIBAgIUDtJoY9b/CFspF/RUIPaap52nSgQwDQYJKoZIhvcNAQEL
+      BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI1MTAwMjA0MzQ1NloXDTI2MTAw
+      MjA0MzQ1NlowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF
+      AAOCAQ8AMIIBCgKCAQEAnMguu1y/XJhzo8BH50kFTakWSlxddcXZWj0oFyN4us8y
+      Sg7Xp0EavoGOk1+7i0Y4ClrKWUudKWr47CNfd3NKY+SWoRnMQytEelJfXav5kB6f
+      ymI/UBdl++lOHgZuGy7mKD6DvNGyxqZUmYT7APExNm+51wrVeUn7cxGrika29ADP
+      NjFH3HWiimIjLGTMvIZy6B4eUhl145zWaU1oDzP/5E3uc020DhVXKnawDKMQYnT5
+      sp1SbWaO/SGymhXEdKIg6yIp4U4HCrqyY4KCt6LhlPekK0qC8vDLJ2n0fUV9FJxQ
+      JJklpFwrSpTOj+tbtWnJTUx2dqvRpxMsutlDxuXEowIDAQABo1MwUTAdBgNVHQ4E
+      FgQUj4v2XnPOapSI/zh/a2iZeqIo8ckwHwYDVR0jBBgwFoAUj4v2XnPOapSI/zh/
+      a2iZeqIo8ckwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAYVzG
+      FPSH1/Uql6Y4ILRH8ZgL4GlB1/LM2eJRPiADaYs7rmKQ64LO1HIMNwKX2BVQZ9Ro
+      ydpb7LFOcDUKq+fW6N26WzIkfcA+dWoURyQ93Oe28A4QJTCTnucZ/PyJlKMdADuE
+      Jku2iUfrchPXyK0fpITmjb/JsZjP2HqHqRa+5OU1YNLC+O+wcYlE0OpnaKlnfdGn
+      TzrLQHCMJOwM0a3OYzZSV0s/kNVe2AQclTnwVP94FRxvt1IbMszC3RB0stLo2nKP
+      mwg94bh/GCPV+5uHCUlnAq3R9JBufRFK7cF+BQxNrHDq29awpsCFgO/6ZDeVVzIi
+      OwpmHOiUIn1V94kARQ==
+      -----END CERTIFICATE-----
+    key: |
+      -----REDACTED-PRIVATE-KEY-----
+
+  # Local development environment variables
+  env:
+    LOG_LEVEL: "debug"
+
+  securityContext: null
+  containerSecurityContext:
+    runAsNonRoot: false
+    runAsUser: 0
+    readOnlyRootFilesystem: false
+    allowPrivilegeEscalation: true
+
+  # Resource constraints for local development
+  resources:
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+
+  # Relaxed probes for local development
+  livenessProbe:
+    tcpSocket:
+      port: 8085
+    initialDelaySeconds: 15
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 5
+
+  readinessProbe:
+    tcpSocket:
+      port: 8085
+    initialDelaySeconds: 5
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 5

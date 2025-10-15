@@ -1,0 +1,16 @@
+Thanks for installing Aegis Spoke!
+
+Namespace: {{ .Release.Namespace }}
+Release:   {{ .Release.Name }}
+
+Proxy ingress:
+  Host: {{ .Values.proxy.ingress.hostname }}
+  Path: /proxy
+
+To inspect resources:
+  kubectl -n {{ .Release.Namespace }} get deploy,svc,ingress -l app.kubernetes.io/instance={{ .Release.Name }}
+
+Check pod readiness:
+  kubectl -n {{ .Release.Namespace }} get pods
+
+If using nginx Ingress, verify controller is installed and DNS resolves to the LoadBalancer IP.

@@ -1,0 +1,85 @@
+# Test values for cloud deployment with PostgreSQL
+platformApi:
+  enabled: true
+  replicaCount: 1  # Start with 1 for testing
+
+  image:
+    repository: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/platform-api
+    tag: "latest"
+    pullPolicy: Always
+
+  env:
+    LOG_LEVEL: "debug"  # More verbose for testing
+    ENVIRONMENT: "test"
+    AEGIS_STORE_BACKEND: "postgres"  # Key test: Use PostgreSQL
+    DB_HOST: "aegis-spoke-prod-db.cepmyey24yl0.us-east-1.rds.amazonaws.com"
+    DB_PORT: "5432"
+    DB_NAME: "aegis"
+    DB_USER: "aegis_api"
+    DB_SSLMODE: "require"
+    AEGIS_PROXY_BASE_URL: "https://proxy-test.example.com"
+    AEGIS_PROXY_EXPECTED_AUDIENCE: "aegis-proxy"
+
+  # Secrets will be set via command line
+  secrets:
+    db-password: ""
+    proxy-jwt-secret: ""
+
+  # Use TCP probes since /healthz and /readyz aren't implemented
+  livenessProbe:
+    tcpSocket:
+      port: 8080
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    failureThreshold: 3
+    httpGet: null  # Remove httpGet
+
+  readinessProbe:
+    tcpSocket:
+      port: 8080
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 3
+    httpGet: null  # Remove httpGet
+
+  # Enable database migrations
+  migrations:
+    enabled: true
+    image:
+      repository: ghcr.io/golang-migrate/migrate
+      tag: v4.16.2
+      pullPolicy: IfNotPresent
+
+proxy:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/proxy
+    tag: "latest"
+    pullPolicy: Always
+
+  jwtSecret: ""  # Will be set via command line
+
+  # TLS configuration for testing
+  tls:
+    enabled: true
+    cert: ""  # Will be set via --set-file
+    key: ""   # Will be set via --set-file
+
+  # Use TCP probes
+  livenessProbe:
+    tcpSocket:
+      port: 8080
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    failureThreshold: 3
+    httpGet: null  # Remove httpGet
+
+  readinessProbe:
+    tcpSocket:
+      port: 8080
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 3
+    httpGet: null  # Remove httpGet

@@ -1,0 +1,63 @@
+# TLS overlay for platform-api gRPC endpoint and proxy service
+# Apply alongside values-cloud.yaml when deploying in TLS mode via generate-helm-values.sh --tls
+
+platformApi:
+  tls:
+    enabled: true
+    cert: ""
+    key: ""
+    clientCA: ""
+  ingress:
+    enabled: true
+    className: "nginx"
+    annotations:
+      nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      nginx.ingress.kubernetes.io/rate-limit: "100"
+      nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    hosts:
+      - host: platform-api.yourdomain.com
+        paths:
+          - path: /
+            pathType: Prefix
+            service: "http"
+      - host: platform-api-grpc.yourdomain.com
+        paths:
+          - path: /
+            pathType: Prefix
+            service: "grpc"
+    tls:
+      - secretName: platform-api-tls
+        hosts:
+          - platform-api.yourdomain.com
+          - platform-api-grpc.yourdomain.com
+  service:
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+      service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+
+proxy:
+  ingress:
+    enabled: true
+    className: "nginx"
+    annotations:
+      nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      nginx.ingress.kubernetes.io/rate-limit: "1000"
+      nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+      nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+    hosts:
+      - host: proxy.yourdomain.com
+        paths:
+          - path: /proxy
+            pathType: Prefix
+    tls:
+      - secretName: proxy-ingress-tls
+        hosts:
+          - proxy.yourdomain.com
+  tls:
+    enabled: true
+  service:
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+      service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"

@@ -1,0 +1,56 @@
+{{- $m := .Values.platformApi.migrations -}}
+{{- if and .Values.platformApi.enabled $m $m.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "aegis-services.platformApi.fullname" . }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aegis-services.labels" . | nindent 4 }}
+    app.kubernetes.io/component: platform-api
+    aegis.yourorg.dev/job: migrate
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  {{- with $m.ttlSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ . }}
+  {{- end }}
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "aegis-services.platformApi.selectorLabels" . | nindent 8 }}
+        aegis.yourorg.dev/job: migrate
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: "{{ $m.image.repository }}:{{ $m.image.tag }}"
+          imagePullPolicy: {{ $m.image.pullPolicy | default "IfNotPresent" }}
+          args:
+            {{- range $m.args }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            {{- range $key, $value := .Values.platformApi.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- range $key, $value := .Values.platformApi.envFromSecret }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegis-services.platformApi.secretName" $ }}
+                  key: {{ $value }}
+            {{- end }}
+            - name: DATABASE_URL
+              value: "postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=$(DB_SSLMODE)"
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+      volumes:
+        - name: migrations
+          configMap:
+            name: {{ include "aegis-services.platformApi.fullname" . }}-migrations
+{{- end }}

@@ -1,0 +1,383 @@
+# AEGIS Services Helm Chart Values
+# FedRAMP Moderate Compliance Configuration
+
+# Platform API Configuration
+platformApi:
+  image:
+    repository: aegis-platform-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  
+  replicas: 2
+  
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  
+  # AU-3: Content of Audit Records
+  auditLogging:
+    enabled: true
+    level: info
+    format: json
+    destination: stdout
+    # AU-3 Enhancement: Structured audit record schema
+    schema:
+      mandatory:
+        - eventType
+        - timestamp
+        - source
+        - outcome
+        - identity
+        - location
+        - eventMetadata
+      timestampFormat: ISO8601
+      outcomeValues:
+        - success
+        - failure
+        - error
+      enforcementMode: strict  # Fail operations if audit logging fails
+    retention:
+      days: 90
+    
+  # SC-8, SC-13: Transmission Confidentiality and Cryptographic Protection
+  tls:
+    enabled: true
+    certPath: /etc/certs/tls.crt
+    keyPath: /etc/certs/tls.key
+    caPath: /etc/certs/ca.crt
+    # SC-13 Enhancement: FIPS 140-2 Compliance
+    fipsMode: true
+    validateCipherSuites: true
+    enforceTLS13: false
+    minimumTLSVersion: "1.2"
+    cipherSuiteWhitelist:
+      - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+      - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+      - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+      - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+      - TLS_RSA_WITH_AES_256_GCM_SHA384
+      - TLS_RSA_WITH_AES_128_GCM_SHA256
+  
+  # AC-6: Least Privilege
+  serviceAccount:
+    create: true
+    name: aegis-platform-api
+    annotations: {}
+  
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10000
+    fsGroup: 10000
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    seccompProfile:
+      type: RuntimeDefault
+
+# Proxy Configuration
+proxy:
+  image:
+    repository: aegis-proxy
+    tag: latest
+    pullPolicy: IfNotPresent
+  
+  replicas: 3
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  
+  # AU-2, AU-3: Audit Events and Content
+  auditLogging:
+    enabled: true
+    level: info
+    format: json
+    destination: stdout
+    # AU-3 Enhancement: Structured audit record schema
+    schema:
+      mandatory:
+        - eventType
+        - timestamp
+        - source
+        - outcome
+        - identity
+        - location
+        - eventMetadata
+      timestampFormat: ISO8601
+      outcomeValues:
+        - success
+        - failure
+        - error
+      enforcementMode: strict
+    # Proxy-specific audit fields
+    proxyFields:
+      - clientIP
+      - method
+      - path
+      - statusCode
+      - duration
+      - jwtSubject
+      - tlsVersion
+      - cipherSuite
+    retention:
+      days: 90
+  
+  # SC-8, SC-13: Transmission Confidentiality and Cryptographic Protection
+  tls:
+    enabled: true
+    certPath: /etc/certs/tls.crt
+    keyPath: /etc/certs/tls.key
+    caPath: /etc/certs/ca.crt
+    # SC-13 Enhancement: FIPS 140-2 Compliance
+    fipsMode: true
+    validateCipherSuites: true
+    enforceTLS13: false
+    minimumTLSVersion: "1.2"
+    cipherSuiteWhitelist:
+      - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+      - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+      - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+      - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+      - TLS_RSA_WITH_AES_256_GCM_SHA384
+      - TLS_RSA_WITH_AES_128_GCM_SHA256
+  
+  # IA-2: Identification and Authentication
+  jwt:
+    secretName: aegis-jwt-secret
+    algorithm: RS256
+    issuer: aegis-platform
+    audience: aegis-services
+  
+  # AC-6: Least Privilege
+  serviceAccount:
+    create: true
+    name: aegis-proxy
+    annotations: {}
+  
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10000
+    fsGroup: 10000
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    seccompProfile:
+      type: RuntimeDefault
+
+# SC-7: Boundary Protection
+networkPolicy:
+  enabled: true
+  defaultDenyAll: true  # SC-7 Enhancement
+  
+  platformApi:
+    ingress:
+      enabled: true
+      from:
+        - podSelector:
+            matchLabels:
+              app: aegis-proxy
+        - podSelector:
+            matchLabels:
+              app: aegis-k8s-agent
+      ports:
+        - protocol: TCP
+          port: 8443
+    egress:
+      enabled: true
+      to:
+        # DNS
+        - podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+          namespaceSelector:
+            matchLabels:
+              name: kube-system
+        # Kubernetes API
+        - ipBlock:
+            cidr: 10.0.0.0/8  # Adjust for cluster CIDR
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: UDP
+          port: 53
+  
+  proxy:
+    ingress:
+      enabled: true
+      from:
+        - namespaceSelector:
+            matchLabels:
+              ingress: allowed
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 8443
+    egress:
+      enabled: true
+      to:
+        - podSelector:
+            matchLabels:
+              app: aegis-platform-api
+        # DNS
+        - podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+          namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: TCP
+          port: 8443
+        - protocol: UDP
+          port: 53
+
+# SI-4: System Monitoring
+securityMonitoring:
+  enabled: true
+  # Falco integration for runtime security monitoring
+  falcoIntegration:
+    enabled: true
+    priorityLevel: warning
+    rules:
+      - file_integrity_monitoring
+      - process_execution_monitoring
+      - network_connection_monitoring
+      - privileged_container_detection
+  # Prometheus metrics for security events
+  prometheusMetrics:
+    enabled: true
+    securityEvents: true
+    port: 9090
+    path: /metrics
+    customMetrics:
+      - authentication_failures
+      - authorization_denials
+      - rate_limit_violations
+      - tls_handshake_failures
+      - suspicious_activity_detected
+  # Alerting configuration
+  alerting:
+    enabled: true
+    channels:
+      # Configure with actual webhook URLs
+      # - type: webhook
+      #   url: https://alertmanager.example.com/api/v1/alerts
+      # - type: pagerduty
+      #   integrationKey: <key>
+    thresholds:
+      criticalEvents: 10
+      warningEvents: 50
+      timeWindow: 5m
+  # Anomaly detection (ML-based)
+  anomalyDetection:
+    enabled: false
+    mlThreshold: 0.8
+    learningPeriod: 7d
+    features:
+      - request_patterns
+      - connection_sources
+      - resource_access_patterns
+
+# IA-5: Authenticator Management
+secretRotation:
+  enabled: true
+  schedule: "0 0 1 * *"  # Monthly
+  secrets:
+    - name: aegis-jwt-secret
+      type: rsa
+      keySize: 4096
+  # IA-5 Enhancement: Notification and audit
+  notificationChannels:
+    # Configure with actual webhook URLs
+    # - type: webhook
+    #   url: https://notification.example.com/secret-rotation
+    # - type: slack
+    #   webhookUrl: https://hooks.slack.com/services/XXX
+  encryptionAtRest: true
+  annotations:
+    storageclass.kubernetes.io/encryption: aes256
+  auditTrail: enabled
+  retention:
+    backupPreviousSecret: true
+    backupDays: 90
+  validation:
+    verifyStrength: true
+    minimumEntropy: 256
+  failurePolicy: Fail
+
+# SC-7: Boundary Protection - Ingress
+ingressSecurity:
+  enabled: true
+  allowedSourceRanges:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+  rateLimiting:
+    enabled: true
+    requestsPerMinute: 1000
+    burstSize: 2000
+  ddosProtection:
+    enabled: true
+    maxConnectionsPerIP: 100
+
+# SI-2: Flaw Remediation
+imageSecurity:
+  scanning:
+    enabled: true
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    registry: harbor.example.com
+    severity:
+      fail: critical,high
+      warn: medium
+  admission:
+    enabled: true
+    policy: enforce
+    allowedRegistries:
+      - harbor.example.com
+      - ghcr.io/aegis-project
+
+# PodSecurity Standards Enforcement
+podSecurity:
+  enabled: true
+  enforce: restricted
+  audit: restricted
+  warn: restricted
+  standards:
+    runAsNonRoot: true
+    seccompProfile: RuntimeDefault
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+
+# Global Configuration
+global:
+  domain: aegis.example.com
+  environment: production
+  compliance:
+    fedramp:
+      enabled: true
+      baseline: moderate
+      controls:
+        - AC-6
+        - AU-2
+        - AU-3
+        - IA-5
+        - SC-7
+        - SC-8
+        - SC-13
+        - SI-2
+        - SI-4

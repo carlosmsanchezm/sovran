@@ -1,0 +1,18 @@
+apiVersion: v2
+name: aegis-services
+description: A unified Helm chart for deploying Aegis platform-api and proxy services
+type: application
+version: 0.1.0
+appVersion: "latest"
+home: "https://github.com/yourorg/aegis"
+maintainers:
+  - name: Aegis Team
+    email: team@yourorg.dev
+keywords:
+  - aegis
+  - platform-api
+  - proxy
+  - microservices
+  - kubernetes
+sources:
+  - https://github.com/yourorg/aegis

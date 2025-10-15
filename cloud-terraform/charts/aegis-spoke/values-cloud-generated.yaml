@@ -1,0 +1,17 @@
+# Auto-generated from Terraform - aegis-spoke (Workload Cluster)
+# Cluster: aegis-spoke-prod
+# Region: us-east-1
+# Generated: 2025-10-06T14:04:15Z
+
+k8sAgent:
+  image:
+    repository: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/k8s-agent
+    tag: "latest"  # TODO: Use specific version tags
+
+  env:
+    AEGIS_CP_GRPC: "aegis-platform-api.aegis-system.svc.cluster.local:8081"
+    AEGIS_PROXY_INGRESS_HOST: "proxy.yourdomain.com"  # TODO: Update domain
+    AEGIS_CLUSTER_ID: "aws-us-east-1-prod"
+
+proxy:
+  enabled: false  # Use aegis-services proxy for hub/spoke architecture
