@@ -330,6 +330,12 @@ echo "   ⚙️  Applying database schema via Kubernetes Job"
 MIGRATION_CONFIGMAP="${HELM_RELEASE}-migrations"
 MIGRATION_JOB="${HELM_RELEASE}-migrate"
 MIGRATIONS_DIR="${SCRIPT_DIR}/../services/platform-api/migrations"
+if [ ! -d "${MIGRATIONS_DIR}" ]; then
+  ALT_MIGRATIONS_DIR="${SCRIPT_DIR}/../charts/aegis-services/files/platform-api/migrations"
+  if [ -d "${ALT_MIGRATIONS_DIR}" ]; then
+    MIGRATIONS_DIR="${ALT_MIGRATIONS_DIR}"
+  fi
+fi
 
 if [ ! -f "${MIGRATIONS_DIR}/0001_init.sql" ]; then
   echo "❌ Migration file not found at ${MIGRATIONS_DIR}/0001_init.sql"
