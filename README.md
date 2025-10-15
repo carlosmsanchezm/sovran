@@ -14,6 +14,43 @@ The extension is now capable of driving real platform-issued tickets, understand
 handshake, and surfaces the active workspace ID in the VS Code status bar so we always know which
 remote environment is in use.
 
+## Testing
+
+### Local Test Suite
+
+- Install dependencies and compile once: `npm install` and `npm run build`.
+- Run everything with `npm test`. The runner (`scripts/test/run-all.js`) boots a local echo server,
+  TLS bridge, and the dev proxy so the extension exercises the full handshake without cloud access.
+- What runs:
+  - **Unit tests** (`npm run -w aegis-remote test:unit`): Jest coverage for resolvers, ticket
+    handling, and configuration helpers. Coverage artifacts land in
+    `aegis-vscode-remote/extension/coverage`.
+  - **Integration tests** (`npm run -w aegis-remote test:integration`): Spins up the shim proxy via
+    `AEGIS_TEST_PROXY_URL` and validates that the WebSocket tunnel, ticket redemption, and heartbeat
+    logic stay healthy under failure scenarios.
+  - **Electron E2E** (`npm run -w aegis-remote test:e2e`): Uses `@vscode/test-electron` to launch
+    VS Code headlessly, installs the built extension, and validates that a workspace can be selected
+    and a remote authority negotiated end-to-end against the local tunnel.
+- Logs and JUnit output are stored under `aegis-vscode-remote/extension/test-results/junit`. When
+  invoking Jest directly, pass `--runInBand` if you need deterministic ordering.
+
+### Remote Workflows (GitHub Actions)
+
+- **CI – Unit, Integration & E2E** (`.github/workflows/ci.yml`): Runs on every PR/push with Node 20
+  in Linux. Mirrors the local flow above but adds `xvfb-run` so the Electron harness runs without a
+  display. Artifacts provide coverage (`coverage-and-jest-results`) and E2E JUnit output
+  (`e2e-junit`).
+- **VS Code Real Backend E2E** (`.github/workflows/e2e-real.yml`): Manual `workflow_dispatch` that
+  targets a live workspace. Supply the Platform gRPC address, namespace, project (optional), and the
+  workspace ID; the workflow grabs credentials from `AEGIS_TEST_EMAIL`/`AEGIS_TEST_TOKEN` secrets,
+  provisions an optional CA bundle, and runs `npm run test:e2e:real` to confirm the extension can
+  negotiate with the actual control plane.
+- **Extension Cloud TLS E2E** (`.github/workflows/cloud-e2e.yml`): End-to-end smoke for TLS
+  environments. It stands up a short-lived preview cluster via Terraform/Helm, publishes the CA
+  bundle, then reuses the real-backend E2E harness against that environment.
+- Trigger any workflow from the Actions tab; when tests fail you will find Mocha/Jest XML in the
+  uploaded artifacts to cross-reference with VS Code logs.
+
 ## High-level Flow
 
 1. **VS Code extension** (`aegis-remote`) calls Platform API `CreateConnectionSession` using an

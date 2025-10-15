@@ -11,7 +11,7 @@ if [[ -z "${K8S_NAMESPACE:-}" ]]; then
   exit 1
 fi
 
-TERRAFORM_DIR="${TERRAFORM_DIR:-infra/terraform}"
+TERRAFORM_DIR="${TERRAFORM_DIR:-cloud-terraform/terraform}"
 CA_BUNDLE="${CA_BUNDLE:-${HOME}/aegis-platform-api-ca.crt}"
 
 if [[ ! -d "${TERRAFORM_DIR}" ]]; then

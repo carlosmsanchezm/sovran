@@ -1,0 +1,9 @@
+# Example backend configuration for Terraform remote state
+# Copy this file to backend.hcl and update the values to match your AWS account
+
+bucket         = "your-terraform-state-bucket"      # S3 bucket used to hold terraform state
+key            = "aegis/prod/terraform.tfstate"     # Object key within the bucket
+region         = "us-east-1"                         # AWS region hosting the bucket
+encrypt        = true                                 # Enable server-side encryption
+# Optional but recommended: DynamoDB table for state locking
+# dynamodb_table = "terraform-lock-table"

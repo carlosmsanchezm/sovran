@@ -1,0 +1,24 @@
+k8sAgent:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/k8s-agent
+    tag: "latest"
+    pullPolicy: Always
+
+  env:
+    AEGIS_CLUSTER_ID: "aegis-spoke-prod"
+    AEGIS_CP_GRPC: "172.20.81.76:8081"  # platform-api service ClusterIP
+    AEGIS_PROXY_INGRESS_HOST: "test-proxy.example.com"
+    AEGIS_FLAVORS: "nano"
+    AEGIS_REGION: "us-east-1"
+    AEGIS_PROVIDER: "aws"
+    LOG_LEVEL: "debug"
+
+proxy:
+  enabled: false  # We have proxy in aegis-services namespace
+  tls:
+    terminateAtIngress: true
+    cert: "dummy"  # Not used since proxy is disabled
+    key: "dummy"   # Not used since proxy is disabled
