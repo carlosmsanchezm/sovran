@@ -360,6 +360,7 @@ jobs:
           kubectl delete namespace aegis-workloads --ignore-not-found --wait --timeout=5m || true
 
       - name: Terraform destroy
+        if: ${{ needs.deploy-preview.result == 'success' && needs.deploy-preview.outputs.preview_id != '' }}
         working-directory: cloud-terraform/terraform
         run: |
           set -euo pipefail
