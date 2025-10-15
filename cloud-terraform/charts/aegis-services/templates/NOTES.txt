@@ -1,0 +1,82 @@
+🎉 Aegis Services have been deployed successfully!
+
+📊 Deployment Summary:
+{{- if .Values.platformApi.enabled }}
+  ✅ Platform API: Enabled
+{{- else }}
+  ❌ Platform API: Disabled
+{{- end }}
+{{- if .Values.proxy.enabled }}
+  ✅ Proxy: Enabled
+{{- else }}
+  ❌ Proxy: Disabled
+{{- end }}
+
+🔗 Service Access:
+
+{{- if .Values.platformApi.enabled }}
+Platform API:
+{{- if .Values.platformApi.ingress.enabled }}
+{{- range $host := .Values.platformApi.ingress.hosts }}
+  🌐 HTTP:  https://{{ $host.host }}/healthz
+  🌐 gRPC:  {{ $host.host }}:{{ $.Values.platformApi.service.grpcPort }}
+{{- end }}
+{{- else if eq .Values.platformApi.service.type "NodePort" }}
+  🖥️  HTTP:  http://<NODE-IP>:{{ .Values.platformApi.service.httpNodePort | default 30080 }}/healthz
+  🖥️  gRPC:  <NODE-IP>:{{ .Values.platformApi.service.grpcNodePort | default 30081 }}
+{{- else if eq .Values.platformApi.service.type "LoadBalancer" }}
+  ☁️  Get external IP: kubectl get svc {{ include "aegis-services.platformApi.fullname" . }} -n {{ .Release.Namespace }}
+{{- else }}
+  🔄 Port forward: kubectl port-forward svc/{{ include "aegis-services.platformApi.fullname" . }} 8080:{{ .Values.platformApi.service.httpPort }} -n {{ .Release.Namespace }}
+  📡 Then access: http://localhost:8080/healthz
+{{- end }}
+{{- end }}
+
+{{- if .Values.proxy.enabled }}
+Proxy:
+{{- if .Values.proxy.ingress.enabled }}
+{{- range $host := .Values.proxy.ingress.hosts }}
+  🌐 Proxy: https://{{ $host.host }}{{ (index $host.paths 0).path }}
+{{- end }}
+{{- else if eq .Values.proxy.service.type "NodePort" }}
+  🖥️  Proxy: http://<NODE-IP>:{{ .Values.proxy.service.nodePort | default 30085 }}/proxy/
+{{- else if eq .Values.proxy.service.type "LoadBalancer" }}
+  ☁️  Get external IP: kubectl get svc {{ include "aegis-services.proxy.fullname" . }} -n {{ .Release.Namespace }}
+{{- else }}
+  🔄 Port forward: kubectl port-forward svc/{{ include "aegis-services.proxy.fullname" . }} 8080:{{ .Values.proxy.service.port }} -n {{ .Release.Namespace }}
+  📡 Then access: http://localhost:8080/proxy/
+{{- end }}
+{{- end }}
+
+📋 Useful Commands:
+
+  # Check pod status
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }} -n {{ .Release.Namespace }}
+
+{{- if .Values.platformApi.enabled }}
+  # Check platform-api logs
+  kubectl logs -l app.kubernetes.io/component=platform-api -n {{ .Release.Namespace }} -f
+{{- end }}
+
+{{- if .Values.proxy.enabled }}
+  # Check proxy logs
+  kubectl logs -l app.kubernetes.io/component=proxy -n {{ .Release.Namespace }} -f
+{{- end }}
+
+  # View all resources
+  kubectl get all -l app.kubernetes.io/instance={{ .Release.Name }} -n {{ .Release.Namespace }}
+
+📚 Documentation:
+  Helm Chart: ./charts/aegis-services/README.md
+  Configuration: ./charts/aegis-services/values.yaml
+
+🎯 Next Steps:
+{{- if .Values.platformApi.enabled }}
+  1. Verify platform-api health: curl <PLATFORM-API-URL>/healthz
+{{- end }}
+{{- if .Values.proxy.enabled }}
+  2. Test proxy authentication with valid JWT token
+{{- end }}
+  3. Configure monitoring and logging as needed
+
+Happy computing with Aegis! 🚀

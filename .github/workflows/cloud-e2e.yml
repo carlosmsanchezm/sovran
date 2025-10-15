@@ -1,0 +1,376 @@
+name: Extension Cloud TLS E2E
+
+on:
+  push:
+    branches:
+      - feature/ci-tests
+  pull_request:
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+
+concurrency:
+  group: extension-preview-${{ github.ref }}-${{ github.event.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    name: Deploy Preview Environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      preview_id: ${{ steps.ids.outputs.preview_id }}
+      preview_namespace: ${{ steps.ids.outputs.preview_namespace }}
+      preview_release: ${{ steps.ids.outputs.preview_release }}
+      grpc_addr: ${{ steps.configure.outputs.grpc_addr }}
+      grpc_host: ${{ steps.configure.outputs.grpc_host }}
+      proxy_hostname: ${{ steps.configure.outputs.proxy_hostname }}
+      grpc_ca: ${{ steps.configure.outputs.grpc_ca }}
+      platform_ip: ${{ steps.configure.outputs.platform_ip }}
+      proxy_ip: ${{ steps.configure.outputs.proxy_ip }}
+    steps:
+      - name: Checkout extension repository
+        uses: actions/checkout@v4
+
+      - name: Derive preview identifiers
+        id: ids
+        run: |
+          preview_id="cloud-e2e"
+          echo "preview_id=${preview_id}" >>"${GITHUB_OUTPUT}"
+          echo "preview_namespace=${preview_id}" >>"${GITHUB_OUTPUT}"
+          echo "preview_release=${preview_id}" >>"${GITHUB_OUTPUT}"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_wrapper: false
+
+      - name: Prepare Terraform state
+        working-directory: cloud-terraform/terraform
+        run: |
+          set -euo pipefail
+          export TF_IN_AUTOMATION=1
+          export TF_INPUT=0
+          TF_WS="${{ steps.ids.outputs.preview_id }}"
+          terraform init -backend-config=backend.hcl -input=false
+          echo "Available Terraform workspaces:"
+          terraform workspace list
+          TF_ENV="${{ steps.ids.outputs.preview_release }}"
+          echo "TF_VAR_environment=${TF_ENV}" >> "$GITHUB_ENV"
+          if terraform workspace list | grep -q "^  ${TF_WS}$"; then
+            terraform workspace select "${TF_WS}"
+          else
+            terraform workspace new "${TF_WS}"
+          fi
+          terraform workspace select "${TF_WS}"
+          echo "Using Terraform workspace: ${TF_WS} (environment ${TF_ENV})"
+      - name: Terraform apply infrastructure
+        working-directory: cloud-terraform/terraform
+        run: |
+          set -euo pipefail
+          TF_WS="${{ steps.ids.outputs.preview_id }}"
+          terraform workspace select "${TF_WS}"
+          terraform apply -auto-approve -input=false
+          terraform state pull > terraform.tfstate
+          echo "TF_CLI_ARGS_output=-state=$(pwd)/terraform.tfstate" >> "$GITHUB_ENV"
+
+      - name: Deploy control plane via Helm
+        working-directory: cloud-terraform
+        env:
+          HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}
+          K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
+          SPOKE_HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}-spoke
+          SKIP_ROUTE53_UPDATE: '1'
+          PLATFORM_API_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/platform-api:v1.0.6-tls2
+          PROXY_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/proxy:no-client-cert
+          K8S_AGENT_IMAGE_TAG: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/k8s-agent:v1.0.2-tls-20251005-amd64
+        run: |
+          set -euo pipefail
+          ./terraform/generate-helm-values.sh --non-interactive --tls
+
+      - name: Install CLI dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq dnsutils
+          GRPCURL_VERSION=1.8.9
+          curl -sSL "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin grpcurl
+          sudo chmod +x /usr/local/bin/grpcurl
+          grpcurl --version
+
+      - name: Configure preview endpoints
+        id: configure
+        env:
+          HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}
+          K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
+          PROXY_CLUSTER_ID: ${{ format('aegis-spoke-{0}', steps.ids.outputs.preview_release) }}
+          TERRAFORM_DIR: cloud-terraform/terraform
+        run: |
+          set -euo pipefail
+          ./scripts/ci/configure-preview.sh
+
+      - name: Ensure kubeconfig secret for platform API
+        env:
+          CLUSTER_ID: ${{ format('aegis-spoke-{0}', steps.ids.outputs.preview_release) }}
+          K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          tmpl="${tmpdir}/kubeconfig.tmpl"
+          cat <<'EOF' > "${tmpl}"
+          apiVersion: v1
+          clusters:
+          - cluster:
+              certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              server: https://kubernetes.default.svc
+            name: ${CLUSTER_ID}
+          contexts:
+          - context:
+              cluster: ${CLUSTER_ID}
+              user: ${CLUSTER_ID}
+            name: ${CLUSTER_ID}
+          current-context: ${CLUSTER_ID}
+          kind: Config
+          users:
+          - name: ${CLUSTER_ID}
+            user:
+              tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+          EOF
+          tmpfile="${tmpdir}/kubeconfig"
+          envsubst '${CLUSTER_ID}' < "${tmpl}" > "${tmpfile}"
+          kubectl create secret generic aegis-kubeconfigs \
+            --namespace "${K8S_NAMESPACE}" \
+            --from-file="${CLUSTER_ID}=${tmpfile}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Upload TLS CA bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls-ca-bundle
+          path: ${{ steps.configure.outputs.grpc_ca }}
+
+      - name: Seed platform control plane
+        env:
+          GRPC_ADDR: ${{ steps.configure.outputs.grpc_addr }}
+          GRPC_HOST: ${{ steps.configure.outputs.grpc_host }}
+          GRPC_CA: ${{ steps.configure.outputs.grpc_ca }}
+          PLATFORM_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
+          PROJECT_ID: ${{ format('p-cloud-e2e-il1-{0}', github.run_id) }}
+          CLUSTER_ID: ${{ format('aegis-spoke-{0}', steps.ids.outputs.preview_release) }}
+          TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
+          TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
+        run: |
+          set -euo pipefail
+          HOST="${GRPC_ADDR}"
+          CACERT="${GRPC_CA}"
+          AUTH="authorization: Bearer ${TEST_TOKEN}"
+          USER_HDR="x-aegis-user: ${TEST_EMAIL}"
+          NS_HDR="x-aegis-namespace: ${PLATFORM_NAMESPACE}"
+
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+            -d '{"project":{"id":"'"${PROJECT_ID}"'","displayName":"Cloud E2E","ownerGroup":"aegis-dev","policy":{"regions":["us-east-1"],"dataLevel":"il1","denyEgressByDefault":false}}}' \
+            "${HOST}" aegis.v1.AegisPlatform/CreateProject || true
+
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+            -d '{"flavor":{"name":"cpu-small"}}' \
+            "${HOST}" aegis.v1.AegisPlatform/UpsertFlavor || true
+
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+            -d '{"queue":{"name":"default","projectId":"'"${PROJECT_ID}"'","priorityTier":"dev","allowedFlavors":["cpu-small"],"defaultMaxDurationSeconds":3600}}' \
+            "${HOST}" aegis.v1.AegisPlatform/UpsertQueue || true
+
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+            -d '{"clusterId":"'"${CLUSTER_ID}"'","provider":"aws","region":"us-east-1","ilLevel":"il1","labels":{"env":"cloud-e2e"}}' \
+            "${HOST}" aegis.v1.AegisPlatform/RegisterCluster || true
+
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+            -d '{"clusterId":"'"${CLUSTER_ID}"'","availableFlavors":[{"name":"cpu-small"}]}' \
+            "${HOST}" aegis.v1.AegisPlatform/Heartbeat || true
+
+      - name: Check platform components
+        env:
+          K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
+        run: |
+          set -euo pipefail
+          echo "== Pods in ${K8S_NAMESPACE} =="
+          kubectl get pods -n "${K8S_NAMESPACE}"
+          echo
+          echo "== AegisWorkloads in ${K8S_NAMESPACE} =="
+          kubectl get aegisworkloads.aegis.yourorg.dev -n "${K8S_NAMESPACE}" || true
+          echo
+          echo "== AegisWorkloads across namespaces =="
+          kubectl get aegisworkloads.aegis.yourorg.dev -A || true
+
+  extension-e2e:
+    name: Extension TLS E2E
+    runs-on: ubuntu-latest
+    needs: deploy-preview
+    if: ${{ always() }}
+    timeout-minutes: 40
+    env:
+      AEGIS_GRPC_ADDR: ${{ needs.deploy-preview.outputs.grpc_addr }}
+      AEGIS_PLATFORM_NAMESPACE: ${{ needs.deploy-preview.outputs.preview_namespace }}
+      AEGIS_PROJECT_ID: ${{ format('p-cloud-e2e-il1-{0}', github.run_id) }}
+      AEGIS_TEST_CLUSTER_ID: ${{ format('aegis-spoke-{0}', needs.deploy-preview.outputs.preview_release) }}
+      AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
+      AEGIS_TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
+      AEGIS_E2E_DEBUG: '1'
+      AEGIS_WORKSPACE_SUBMIT_ATTEMPTS: '12'
+      AEGIS_WORKSPACE_SUBMIT_DELAY_MS: '10000'
+      AEGIS_WORKSPACE_APPEAR_TIMEOUT_MS: '240000'
+      AEGIS_WORKLOAD_NAMESPACE: aegis-workloads
+    steps:
+      - name: Skip if deploy failed
+        if: ${{ needs.deploy-preview.result != 'success' }}
+        run: |
+          echo "Deploy preview job did not succeed (status: ${{ needs.deploy-preview.result }}). Skipping extension E2E."
+          exit 0
+
+      - name: Checkout extension repository
+        uses: actions/checkout@v4
+        if: ${{ needs.deploy-preview.result == 'success' }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+        if: ${{ needs.deploy-preview.result == 'success' }}
+
+      - name: Download TLS CA bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: tls-ca-bundle
+          path: .tls
+        if: ${{ needs.deploy-preview.result == 'success' }}
+
+      - name: Add hosts entries for platform/proxy
+        run: |
+          sudo sed -i.bak "/${{ needs.deploy-preview.outputs.grpc_host }}/d" /etc/hosts
+          echo "${{ needs.deploy-preview.outputs.platform_ip }} ${{ needs.deploy-preview.outputs.grpc_host }}" | sudo tee -a /etc/hosts
+          if [[ -n "${{ needs.deploy-preview.outputs.proxy_hostname }}" && -n "${{ needs.deploy-preview.outputs.proxy_ip }}" ]]; then
+            sudo sed -i.bak "/${{ needs.deploy-preview.outputs.proxy_hostname }}/d" /etc/hosts
+            echo "${{ needs.deploy-preview.outputs.proxy_ip }} ${{ needs.deploy-preview.outputs.proxy_hostname }}" | sudo tee -a /etc/hosts
+          fi
+        if: ${{ needs.deploy-preview.result == 'success' }}
+
+      - name: Configure AWS credentials for EKS access
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+        if: ${{ needs.deploy-preview.result == 'success' }}
+
+      - name: Update kubeconfig for preview cluster
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region "${AWS_REGION}" --name "aegis-spoke-${{ needs.deploy-preview.outputs.preview_release }}"
+        if: ${{ needs.deploy-preview.result == 'success' }}
+
+      - name: Install dependencies
+        working-directory: aegis-vscode-remote/extension
+        run: npm ci
+        if: ${{ needs.deploy-preview.result == 'success' }}
+
+      - name: Install Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+        if: ${{ needs.deploy-preview.result == 'success' }}
+
+      - name: Build extension and E2E harness
+        working-directory: aegis-vscode-remote/extension
+        run: npm run build
+        if: ${{ needs.deploy-preview.result == 'success' }}
+
+      - name: Run VS Code cloud TLS E2E
+        env:
+          NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
+          AEGIS_CA_PEM: ${{ github.workspace }}/.tls/aegis-platform-api-ca.crt
+        working-directory: aegis-vscode-remote/extension
+        run: xvfb-run -a npm run test:e2e:real
+        if: ${{ needs.deploy-preview.result == 'success' }}
+      - name: Dump mocha results on failure
+        if: failure()
+        run: |
+          echo "---- Mocha JUnit report ----"
+          cat aegis-vscode-remote/extension/__tests__/test-results/junit/mocha-e2e-real-results.xml || true
+          echo "---------------------------"
+
+
+  teardown:
+    name: Teardown Preview Environment
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    needs:
+      - deploy-preview
+      - extension-e2e
+    env:
+      PREVIEW_ID: ${{ needs.deploy-preview.outputs.preview_id }}
+      TF_VAR_environment: ${{ needs.deploy-preview.outputs.preview_release }}
+    steps:
+      - name: Checkout extension repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_wrapper: false
+
+      - name: Update kubeconfig for teardown
+        if: ${{ needs.deploy-preview.result == 'success' }}
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region "${AWS_REGION}" --name "aegis-spoke-${{ needs.deploy-preview.outputs.preview_release }}"
+
+      - name: Uninstall Helm releases and namespaces
+        if: ${{ needs.deploy-preview.result == 'success' }}
+        run: |
+          set -euo pipefail
+          NS="${{ needs.deploy-preview.outputs.preview_namespace }}"
+          CORE_RELEASE="${{ needs.deploy-preview.outputs.preview_release }}"
+          SPOKE_RELEASE="${CORE_RELEASE}-spoke"
+
+          echo "Uninstalling Helm release ${CORE_RELEASE} in namespace ${NS}"
+          helm uninstall "${CORE_RELEASE}" -n "${NS}" || echo "Core release already removed"
+
+          echo "Uninstalling Helm release ${SPOKE_RELEASE} in namespace ${NS}"
+          helm uninstall "${SPOKE_RELEASE}" -n "${NS}" || echo "Spoke release already removed"
+
+          echo "Deleting namespace ${NS} (wait for cleanup to release load balancers)"
+          kubectl delete namespace "${NS}" --ignore-not-found --wait --timeout=5m || true
+
+          echo "Deleting workspace namespace aegis-workloads if it exists"
+          kubectl delete namespace aegis-workloads --ignore-not-found --wait --timeout=5m || true
+
+      - name: Terraform destroy
+        if: ${{ needs.deploy-preview.result == 'success' && needs.deploy-preview.outputs.preview_id != '' }}
+        working-directory: cloud-terraform/terraform
+        run: |
+          set -euo pipefail
+          terraform init -backend-config=backend.hcl -input=false
+          TF_WS="${PREVIEW_ID}"
+          if terraform workspace list | grep -q "$TF_WS"; then
+            terraform workspace select "$TF_WS"
+            terraform destroy -auto-approve -input=false || echo "Terraform destroy failed; manual cleanup may be required"
+            terraform workspace select default
+            terraform workspace delete "$TF_WS" || true
+          else
+            echo "Workspace $TF_WS not found; skipping destroy"
+          fi

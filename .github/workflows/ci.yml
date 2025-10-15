@@ -1,0 +1,127 @@
+name: CI - Unit, Integration & E2E
+
+on:
+  push:
+    branches: [ main, develop, "**/ci/**" ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+  repository_dispatch:
+    types: [swarm-run]
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+  actions: read
+  id-token: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests on ${{ matrix.os }} (Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    if: github.ref != 'refs/heads/feature/ci-tests' && github.head_ref != 'feature/ci-tests'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        node: [20.x]
+
+    env:
+      CI: true
+      AEGIS_TEST_PROXY_URL: https://127.0.0.1:7443
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Ensure Linux packages for Electron (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libnss3 libxkbfile1 libsecret-1-0 libasound2t64 \
+            libgtk-3-0 libxshmfence1 libx11-xcb1 libgbm1 \
+            xvfb
+
+      - name: Cache VS Code download used by @vscode/test-electron
+        uses: actions/cache@v4
+        with:
+          path: ~/.vscode-test
+          key: vscode-test-${{ runner.os }}-${{ hashFiles('aegis-vscode-remote/extension/package.json') }}
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --workspaces; fi
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Run tests (Linux headless)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm test
+
+      - name: Run tests (Non-Linux)
+        if: runner.os != 'Linux'
+        run: npm test
+
+      - name: Upload Jest coverage & results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-and-jest-results
+          path: |
+            aegis-vscode-remote/extension/coverage/**
+            aegis-vscode-remote/extension/test-results/junit/**
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload E2E JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-junit
+          path: |
+            aegis-vscode-remote/extension/__tests__/test-results/junit/**
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Create summary for humans & agents
+        if: always()
+        run: |
+          echo "## Test Summary" >> $GITHUB_STEP_SUMMARY
+          node <<'NODE' >> $GITHUB_STEP_SUMMARY
+            const fs = require('fs');
+            const summaryPath = './aegis-vscode-remote/extension/covmake serage/coverage-summary.json';
+            if (fs.existsSync(summaryPath)) {
+              const summary = require(summaryPath).total;
+              console.log(`Lines: ${summary.lines.pct}%  |  Stmts: ${summary.statements.pct}%  |  Branches: ${summary.branches.pct}%  |  Funcs: ${summary.functions.pct}%`);
+            } else {
+              console.log('Coverage summary not found.');
+            }
+          NODE
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- :open_file_folder: **Artifacts:** coverage, jest JUnit, e2e JUnit uploaded." >> $GITHUB_STEP_SUMMARY
+          echo "- :robot: Agents can fetch artifacts via the GitHub API (names: 'coverage-and-jest-results', 'e2e-junit')." >> $GITHUB_STEP_SUMMARY
+
+      - name: Annotate PR with JUnit (Jest + E2E)
+        if: always() && github.event_name == 'pull_request'
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: |
+            aegis-vscode-remote/extension/test-results/junit/jest-results.xml
+            aegis-vscode-remote/extension/__tests__/test-results/junit/mocha-e2e-results.xml
+          require_tests: true
+          check_name: "JUnit Report (Jest + E2E)"
+          detailed_summary: true

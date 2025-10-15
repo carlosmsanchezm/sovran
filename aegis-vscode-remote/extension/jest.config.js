@@ -25,7 +25,16 @@ module.exports = {
     '!src/**/stubs/**'
   ],
   coverageDirectory: '<rootDir>/coverage',
-  coverageReporters: ['text', 'lcov'],
+  reporters: [
+    'default',
+    ['jest-junit', {
+      outputDirectory: '<rootDir>/test-results/junit',
+      outputName: 'jest-results.xml',
+      suiteName: 'jest-tests',
+      addFileAttribute: true
+    }]
+  ],
+  coverageReporters: ['text', 'lcov', 'json-summary', 'json'],
   coverageThreshold: {
     global: {
       lines: 80,

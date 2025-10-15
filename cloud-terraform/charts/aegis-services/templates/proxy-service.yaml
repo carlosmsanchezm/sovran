@@ -1,0 +1,35 @@
+{{- if .Values.proxy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aegis-services.proxy.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aegis-services.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+  {{- with .Values.proxy.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.proxy.service.type }}
+  {{- if and (eq .Values.proxy.service.type "LoadBalancer") .Values.proxy.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.proxy.service.loadBalancerIP }}
+  {{- end }}
+  {{- if and (eq .Values.proxy.service.type "LoadBalancer") .Values.proxy.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- range .Values.proxy.service.loadBalancerSourceRanges }}
+    - {{ . }}
+    {{- end }}
+  {{- end }}
+  ports:
+    - name: proxy
+      port: {{ .Values.proxy.service.port }}
+      targetPort: proxy
+      protocol: TCP
+      {{- if and (or (eq .Values.proxy.service.type "NodePort") (eq .Values.proxy.service.type "LoadBalancer")) .Values.proxy.service.nodePort }}
+      nodePort: {{ .Values.proxy.service.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "aegis-services.proxy.selectorLabels" . | nindent 4 }}
+{{- end }}

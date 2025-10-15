@@ -1,0 +1,73 @@
+{{- if .Values.proxy.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aegis-spoke.proxy.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aegis-spoke.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+spec:
+  replicas: {{ .Values.proxy.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "aegis-spoke.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: proxy
+  template:
+    metadata:
+      annotations:
+        checksum/proxy-secret: {{ include (print $.Template.BasePath "/proxy-secret.yaml") . | sha256sum }}
+        {{- if .Values.proxy.tls.terminateAtIngress }}
+        checksum/proxy-tls-secret: {{ include (print $.Template.BasePath "/proxy-tls-secret.yaml") . | sha256sum }}
+        {{- end }}
+      labels:
+        {{- include "aegis-spoke.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: proxy
+    spec:
+      containers:
+        - name: proxy
+          image: "{{ .Values.proxy.image.repository }}:{{ .Values.proxy.image.tag }}"
+          imagePullPolicy: {{ .Values.proxy.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+{{- if not .Values.proxy.tls.terminateAtIngress }}
+          volumeMounts:
+            - name: proxy-tls
+              mountPath: /etc/aegis-proxy
+              readOnly: true
+{{- end }}
+          env:
+            - name: AEGIS_PROXY_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegis-spoke.proxy.secretName" . }}
+                  key: jwt-secret
+            - name: AEGIS_PROXY_EXPECTED_AUDIENCE
+              value: "aegis-proxy"
+            - name: AEGIS_PROXY_LISTEN
+              value: ":8080"
+            - name: AEGIS_PROXY_ALLOWED_SUFFIX
+              value: ".svc.cluster.local"
+{{- if not .Values.proxy.tls.terminateAtIngress }}
+            - name: AEGIS_PROXY_TLS_CERT
+              value: "/etc/aegis-proxy/tls.crt"
+            - name: AEGIS_PROXY_TLS_KEY
+              value: "/etc/aegis-proxy/tls.key"
+{{- end }}
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+{{- if not .Values.proxy.tls.terminateAtIngress }}
+      volumes:
+        - name: proxy-tls
+          secret:
+            secretName: {{ include "aegis-spoke.proxy.secretName" . }}
+{{- end }}
+{{- end }}

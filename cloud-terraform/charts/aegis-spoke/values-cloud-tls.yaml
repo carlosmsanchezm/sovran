@@ -1,0 +1,7 @@
+# TLS overlay for k8s-agent to connect to platform-api with TLS
+# Apply alongside values-cloud.yaml when platform-api is deployed in TLS mode
+
+k8sAgent:
+  env:
+    # Enable TLS for gRPC connection to platform-api
+    AEGIS_CP_GRPC_INSECURE: "false"

@@ -1,0 +1,33 @@
+{{- if .Values.proxy.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "aegis-spoke.proxy.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aegis-spoke.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+  annotations:
+    {{- with .Values.proxy.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.proxy.ingress.className | quote }}
+  {{- if .Values.proxy.tls.terminateAtIngress }}
+  tls:
+    - hosts:
+        - {{ .Values.proxy.ingress.hostname | quote }}
+      secretName: {{ include "aegis-spoke.proxy.tlsSecretName" . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.proxy.ingress.hostname | quote }}
+      http:
+        paths:
+          - path: /proxy
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "aegis-spoke.proxy.fullname" . }}
+                port:
+                  number: {{ .Values.proxy.service.port }}
+{{- end }}

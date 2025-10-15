@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="jest-tests" tests="20" failures="0" errors="0" time="18.937">
+  <testsuite name="ConnectionManager" errors="0" failures="0" skipped="0" timestamp="2025-10-12T08:14:05" time="18.281" tests="7">
+    <testcase classname="ConnectionManager opens and exchanges messages with metrics updated" name="ConnectionManager opens and exchanges messages with metrics updated" time="0.009">
+    </testcase>
+    <testcase classname="ConnectionManager sends pings and updates lastHeartbeatAt / lastMessageAt" name="ConnectionManager sends pings and updates lastHeartbeatAt / lastMessageAt" time="1.204">
+    </testcase>
+    <testcase classname="ConnectionManager terminates after idle timeout" name="ConnectionManager terminates after idle timeout" time="1.503">
+    </testcase>
+    <testcase classname="ConnectionManager propagates connection errors during connecting" name="ConnectionManager propagates connection errors during connecting" time="5.012">
+    </testcase>
+    <testcase classname="ConnectionManager logs unexpected response details when server rejects upgrade" name="ConnectionManager logs unexpected response details when server rejects upgrade" time="5.002">
+    </testcase>
+    <testcase classname="ConnectionManager send ignores data when socket already closed" name="ConnectionManager send ignores data when socket already closed" time="0.055">
+    </testcase>
+    <testcase classname="ConnectionManager truncates unexpected response body longer than limit" name="ConnectionManager truncates unexpected response body longer than limit" time="5.002">
+    </testcase>
+  </testsuite>
+  <testsuite name="resolver ↔ proxy integration" errors="0" failures="0" skipped="0" timestamp="2025-10-12T08:14:24" time="0.125" tests="1">
+    <testcase classname="resolver ↔ proxy integration establishes transport over proxy and echoes bytes" name="resolver ↔ proxy integration establishes transport over proxy and echoes bytes" time="0.074">
+    </testcase>
+  </testsuite>
+  <testsuite name="AegisResolver" errors="0" failures="0" skipped="0" timestamp="2025-10-12T08:14:24" time="0.18" tests="7">
+    <testcase classname="AegisResolver builds wss URL with /proxy/&lt;wid&gt; and applies TLS options" name="AegisResolver builds wss URL with /proxy/&lt;wid&gt; and applies TLS options" time="0.001">
+    </testcase>
+    <testcase classname="AegisResolver adds CA from settings and logs when read fails" name="AegisResolver adds CA from settings and logs when read fails" time="0">
+    </testcase>
+    <testcase classname="AegisResolver handles diverse proxy url formats" name="AegisResolver handles diverse proxy url formats" time="0.001">
+    </testcase>
+    <testcase classname="AegisResolver merges CA sources and sets client cert options" name="AegisResolver merges CA sources and sets client cert options" time="0.003">
+    </testcase>
+    <testcase classname="AegisResolver surface error for missing or invalid proxy url" name="AegisResolver surface error for missing or invalid proxy url" time="0.011">
+    </testcase>
+    <testcase classname="AegisResolver schedules renewal and triggers forceReconnect" name="AegisResolver schedules renewal and triggers forceReconnect" time="0.001">
+    </testcase>
+    <testcase classname="AegisResolver forceReconnect ends active transport once" name="AegisResolver forceReconnect ends active transport once" time="0">
+    </testcase>
+  </testsuite>
+  <testsuite name="auth module" errors="0" failures="0" skipped="0" timestamp="2025-10-12T08:14:24" time="0.199" tests="5">
+    <testcase classname="auth module initializeAuth registers provider exactly once" name="auth module initializeAuth registers provider exactly once" time="0.134">
+    </testcase>
+    <testcase classname="auth module requireSession creates session, stores secrets, and emits change" name="auth module requireSession creates session, stores secrets, and emits change" time="0.001">
+    </testcase>
+    <testcase classname="auth module signOut clears stored secrets and emits removal event" name="auth module signOut clears stored secrets and emits removal event" time="0.001">
+    </testcase>
+    <testcase classname="auth module getSessions hydrates from secrets with default label when subject missing" name="auth module getSessions hydrates from secrets with default label when subject missing" time="0">
+    </testcase>
+    <testcase classname="auth module createSession throws cancellation error when subject or token missing" name="auth module createSession throws cancellation error when subject or token missing" time="0.001">
+    </testcase>
+  </testsuite>
+</testsuites>

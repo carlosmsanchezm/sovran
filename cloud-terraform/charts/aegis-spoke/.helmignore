@@ -1,0 +1,10 @@
+# Common ignores
+.git/
+.github/
+.vscode/
+.idea/
+*.swp
+*.bak
+*.tmp
+.DS_Store
+charts/

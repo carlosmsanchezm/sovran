@@ -1,0 +1,51 @@
+{{- if .Values.platformApi.enabled }}
+---
+# ClusterRole to manage AegisWorkload resources across all namespaces
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "aegis-services.fullname" . }}-platform-api-workload-manager
+  labels:
+    {{- include "aegis-services.labels" . | nindent 4 }}
+    app.kubernetes.io/component: platform-api
+rules:
+  # AegisWorkload CRD permissions
+  - apiGroups: ["aegis.yourorg.dev"]
+    resources: ["aegisworkloads"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["aegis.yourorg.dev"]
+    resources: ["aegisworkloads/status"]
+    verbs: ["get", "update", "patch"]
+
+  # Namespace permissions to create workload namespaces dynamically
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "create"]
+
+  # Pod and Job inspection for workload status
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+
+---
+# ClusterRoleBinding to bind the ClusterRole to platform-api ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "aegis-services.fullname" . }}-platform-api-workload-manager
+  labels:
+    {{- include "aegis-services.labels" . | nindent 4 }}
+    app.kubernetes.io/component: platform-api
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "aegis-services.fullname" . }}-platform-api-workload-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.platformApi.serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+
+{{- end }}

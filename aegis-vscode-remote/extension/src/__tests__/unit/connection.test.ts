@@ -172,4 +172,88 @@ describe('ConnectionManager', () => {
     const metrics = connection.getMetrics();
     expect(metrics.lastError).toBeDefined();
   });
+
+  test('logs unexpected response details when server rejects upgrade', async () => {
+    const httpServer = http.createServer((_, res) => {
+      res.statusCode = 426;
+      res.end('upgrade required');
+    });
+    httpServer.on('upgrade', (req, socket) => {
+      socket.write('HTTP/1.1 403 Forbidden\r\nContent-Length: 5\r\n\r\nnope!');
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', () => resolve()));
+    const { port } = httpServer.address() as AddressInfo;
+
+    const logs: string[] = [];
+    const connection = new ConnectionManager(`ws://127.0.0.1:${port}`, {
+      heartbeatIntervalMs: 100,
+      idleTimeoutMs: 1000,
+      logLevel: 'debug',
+      log: (msg) => logs.push(msg),
+      rejectUnauthorized: false,
+    });
+
+    await expect(expectRejectWithin(() => connection.open(), 5000)).rejects.toThrow();
+    expect(logs.some((msg) => msg.includes('unexpected response status=403'))).toBe(true);
+    expect(logs.some((msg) => msg.includes('unexpected response body'))).toBe(true);
+
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+  });
+
+  test('send ignores data when socket already closed', async () => {
+    const { port, close } = await createServer((socket) => {
+      socket.on('message', (data) => socket.send(data));
+    });
+    const connection = new ConnectionManager(`ws://127.0.0.1:${port}`, {
+      heartbeatIntervalMs: 100,
+      idleTimeoutMs: 1000,
+      logLevel: 'debug',
+      log: () => {},
+      rejectUnauthorized: false,
+    });
+
+    const transport = await connection.open();
+    const ended = new Promise<void>((resolve) => transport.onDidEnd(() => resolve()));
+    transport.end();
+    await ended;
+
+    const txBefore = connection.getMetrics().bytesTx;
+    transport.send(new Uint8Array([9]));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(connection.getMetrics().bytesTx).toBe(txBefore);
+
+    await close();
+  });
+
+  test('truncates unexpected response body longer than limit', async () => {
+    const largeBody = 'x'.repeat(5000);
+    const httpServer = http.createServer();
+    httpServer.on('upgrade', (req, socket) => {
+      socket.write([
+        'HTTP/1.1 403 Forbidden',
+        'Content-Type: text/plain',
+        `Content-Length: ${largeBody.length}`,
+        '\r\n',
+        largeBody,
+      ].join('\r\n'));
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', () => resolve()));
+    const { port } = httpServer.address() as AddressInfo;
+
+    const logs: string[] = [];
+    const connection = new ConnectionManager(`ws://127.0.0.1:${port}`, {
+      heartbeatIntervalMs: 100,
+      idleTimeoutMs: 1000,
+      logLevel: 'debug',
+      log: (msg) => logs.push(msg),
+      rejectUnauthorized: false,
+    });
+
+    await expect(expectRejectWithin(() => connection.open(), 5000)).rejects.toThrow();
+    expect(logs.some((msg) => msg.includes('unexpected response body=') && msg.includes('…'))).toBe(true);
+
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+  });
 });
