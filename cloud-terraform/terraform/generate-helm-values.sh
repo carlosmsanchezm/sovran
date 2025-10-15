@@ -723,15 +723,19 @@ proxy:
 EOF_BACKSTAGE
 )
 
-  # Write to both cloud config files for convenience
-  echo "${BACKSTAGE_CONFIG}" > "${OUTPUT_DIR}/../aegis-platform/app-config.cloud.yaml"
-  echo "   ✅ Updated: aegis-platform/app-config.cloud.yaml"
+  CONFIG_ROOT="${OUTPUT_DIR}/../aegis-platform"
+  if [ -d "${CONFIG_ROOT}" ]; then
+    echo "${BACKSTAGE_CONFIG}" > "${CONFIG_ROOT}/app-config.cloud.yaml"
+    echo "   ✅ Updated: aegis-platform/app-config.cloud.yaml"
 
-  echo "${BACKSTAGE_CONFIG}" > "${OUTPUT_DIR}/../aegis-platform/app-config.cloud-tls.yaml"
-  echo "   ✅ Updated: aegis-platform/app-config.cloud-tls.yaml"
+    echo "${BACKSTAGE_CONFIG}" > "${CONFIG_ROOT}/app-config.cloud-tls.yaml"
+    echo "   ✅ Updated: aegis-platform/app-config.cloud-tls.yaml"
 
-  echo "${BACKSTAGE_CONFIG}" > "${OUTPUT_DIR}/../aegis-platform/app-config.local.yaml"
-  echo "   ✅ Updated: aegis-platform/app-config.local.yaml"
+    echo "${BACKSTAGE_CONFIG}" > "${CONFIG_ROOT}/app-config.local.yaml"
+    echo "   ✅ Updated: aegis-platform/app-config.local.yaml"
+  else
+    echo "   ℹ️  Skipping Backstage config overrides; ${CONFIG_ROOT} not present"
+  fi
 fi
 
 # Step 8: Deploy k8s-agent (aegis-spoke)
