@@ -333,6 +333,32 @@ jobs:
         with:
           terraform_wrapper: false
 
+      - name: Update kubeconfig for teardown
+        if: ${{ needs.deploy-preview.result == 'success' }}
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region "${AWS_REGION}" --name "aegis-spoke-${{ needs.deploy-preview.outputs.preview_release }}"
+
+      - name: Uninstall Helm releases and namespaces
+        if: ${{ needs.deploy-preview.result == 'success' }}
+        run: |
+          set -euo pipefail
+          NS="${{ needs.deploy-preview.outputs.preview_namespace }}"
+          CORE_RELEASE="${{ needs.deploy-preview.outputs.preview_release }}"
+          SPOKE_RELEASE="${CORE_RELEASE}-spoke"
+
+          echo "Uninstalling Helm release ${CORE_RELEASE} in namespace ${NS}"
+          helm uninstall "${CORE_RELEASE}" -n "${NS}" || echo "Core release already removed"
+
+          echo "Uninstalling Helm release ${SPOKE_RELEASE} in namespace ${NS}"
+          helm uninstall "${SPOKE_RELEASE}" -n "${NS}" || echo "Spoke release already removed"
+
+          echo "Deleting namespace ${NS} (wait for cleanup to release load balancers)"
+          kubectl delete namespace "${NS}" --ignore-not-found --wait --timeout=5m || true
+
+          echo "Deleting workspace namespace aegis-workloads if it exists"
+          kubectl delete namespace aegis-workloads --ignore-not-found --wait --timeout=5m || true
+
       - name: Terraform destroy
         working-directory: cloud-terraform/terraform
         run: |
