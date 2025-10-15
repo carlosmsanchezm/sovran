@@ -1,0 +1,142 @@
+{{- if .Values.platformApi.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aegis-services.platformApi.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aegis-services.labels" . | nindent 4 }}
+    app.kubernetes.io/component: platform-api
+spec:
+  replicas: {{ .Values.platformApi.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "aegis-services.platformApi.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- if .Values.platformApi.secrets }}
+        checksum/secret: {{ include (print $.Template.BasePath "/platform-api-secret.yaml") . | sha256sum }}
+        {{- end }}
+      labels:
+        {{- include "aegis-services.platformApi.selectorLabels" . | nindent 8 }}
+        {{- with .Values.platformApi.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.platformApi.serviceAccountName }}
+      serviceAccountName: {{ . }}
+      {{- end }}
+      {{- with .Values.platformApi.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.platformApi.securityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: platform-api
+          image: "{{ .Values.platformApi.image.repository }}:{{ .Values.platformApi.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.platformApi.image.pullPolicy }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.platformApi.service.grpcPort }}
+              protocol: TCP
+            - name: http
+              containerPort: {{ .Values.platformApi.service.httpPort }}
+              protocol: TCP
+          env:
+            - name: GRPC_ADDR
+              value: ":{{ .Values.platformApi.service.grpcPort }}"
+            - name: HTTP_ADDR
+              value: ":{{ .Values.platformApi.service.httpPort }}"
+            - name: KUBECONFIGS_DIR
+              value: {{ .Values.platformApi.kubeConfigsDir | quote }}
+            - name: AEGIS_NAMESPACE
+              value: {{ .Values.platformApi.targetNamespace | quote }}
+            {{- if and .Values.proxy.enabled (not (hasKey .Values.platformApi.env "AEGIS_PROXY_BASE_URL")) }}
+            # Automatically set proxy base URL to internal service DNS
+            - name: AEGIS_PROXY_BASE_URL
+              value: "http://{{ include "aegis-services.proxy.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.proxy.service.port }}"
+            {{- end }}
+            {{- range $key, $value := .Values.platformApi.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- range $key, $value := .Values.platformApi.envFromSecret }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegis-services.platformApi.secretName" $ }}
+                  key: {{ $value }}
+            {{- end }}
+            {{- if .Values.proxy.enabled }}
+            # Reference the same JWT secret that the proxy uses
+            - name: AEGIS_PROXY_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegis-services.proxy.secretName" . }}
+                  key: jwt-secret
+            {{- end }}
+            {{- if .Values.platformApi.tls.enabled }}
+            - name: AEGIS_GRPC_TLS_CERT
+              value: "/etc/aegis-platform-api/tls/tls.crt"
+            - name: AEGIS_GRPC_TLS_KEY
+              value: "/etc/aegis-platform-api/tls/tls.key"
+            {{- if .Values.platformApi.tls.clientCA }}
+            - name: AEGIS_GRPC_TLS_CLIENT_CA
+              value: "/etc/aegis-platform-api/tls/ca.crt"
+            {{- end }}
+            {{- end }}
+          {{- if or .Values.platformApi.volumeMounts .Values.platformApi.tls.enabled }}
+          volumeMounts:
+            {{- if .Values.platformApi.tls.enabled }}
+            - name: platform-api-tls
+              mountPath: /etc/aegis-platform-api/tls
+              readOnly: true
+            {{- end }}
+            {{- with .Values.platformApi.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- with .Values.platformApi.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.platformApi.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.platformApi.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.platformApi.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- if or .Values.platformApi.volumes .Values.platformApi.tls.enabled }}
+      volumes:
+        {{- if .Values.platformApi.tls.enabled }}
+        - name: platform-api-tls
+          secret:
+            secretName: {{ include "aegis-services.platformApi.tlsSecretName" . }}
+        {{- end }}
+        {{- with .Values.platformApi.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.platformApi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.platformApi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.platformApi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

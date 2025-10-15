@@ -1,0 +1,6 @@
+apiVersion: v2
+name: aegis-spoke
+description: A Helm chart for the Aegis Spoke, deploying the k8s-agent and proxy.
+type: application
+version: 0.1.1
+appVersion: "1.0.0"

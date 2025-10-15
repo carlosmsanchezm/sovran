@@ -1,0 +1,42 @@
+{{- if .Values.platformApi.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aegis-services.platformApi.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aegis-services.labels" . | nindent 4 }}
+    app.kubernetes.io/component: platform-api
+  {{- with .Values.platformApi.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.platformApi.service.type }}
+  {{- if and (eq .Values.platformApi.service.type "LoadBalancer") .Values.platformApi.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.platformApi.service.loadBalancerIP }}
+  {{- end }}
+  {{- if and (eq .Values.platformApi.service.type "LoadBalancer") .Values.platformApi.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- range .Values.platformApi.service.loadBalancerSourceRanges }}
+    - {{ . }}
+    {{- end }}
+  {{- end }}
+  ports:
+    - name: grpc
+      port: {{ .Values.platformApi.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+      {{- if and (or (eq .Values.platformApi.service.type "NodePort") (eq .Values.platformApi.service.type "LoadBalancer")) .Values.platformApi.service.grpcNodePort }}
+      nodePort: {{ .Values.platformApi.service.grpcNodePort }}
+      {{- end }}
+    - name: http
+      port: {{ .Values.platformApi.service.httpPort }}
+      targetPort: http
+      protocol: TCP
+      {{- if and (or (eq .Values.platformApi.service.type "NodePort") (eq .Values.platformApi.service.type "LoadBalancer")) .Values.platformApi.service.httpNodePort }}
+      nodePort: {{ .Values.platformApi.service.httpNodePort }}
+      {{- end }}
+  selector:
+    {{- include "aegis-services.platformApi.selectorLabels" . | nindent 4 }}
+{{- end }}

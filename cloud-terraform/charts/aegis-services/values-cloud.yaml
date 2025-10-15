@@ -1,0 +1,250 @@
+# Cloud production values for aegis-services
+# This configuration is optimized for production-like environments
+# on cloud platforms like AWS EKS, GCP GKE, or Azure AKS
+
+#################################################################
+# Platform API Configuration - Cloud
+#################################################################
+global:
+  imagePullSecrets:
+    - name: ecr-registry-secret
+
+platformApi:
+  enabled: true
+  replicaCount: 1  # Single instance for resource constraints
+  serviceAccountName: aegis-platform-api
+
+  image:
+    repository: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/platform-api
+    tag: "v1.0.6-tls2"  # TLS-capable build with gRPC support
+    pullPolicy: IfNotPresent
+
+  service:
+    type: LoadBalancer
+    grpcPort: 8081
+    httpPort: 8080
+
+  ingress:
+    enabled: false
+    className: "nginx"
+    annotations: {}
+    hosts: []
+    tls: []
+
+  # Production environment variables
+  env:
+    LOG_LEVEL: "info"
+    ENVIRONMENT: "production"
+    AEGIS_STORE_BACKEND: "postgres"
+    AEGIS_PROXY_BASE_URL: "wss://proxy.yourdomain.com:8080"
+    # AEGIS_PROXY_BASE_URL is automatically set to the proxy service if proxy.enabled=true
+    # For external proxy, set this to the public URL (e.g., "https://proxy.yourdomain.com")
+    AEGIS_PROXY_EXPECTED_AUDIENCE: "aegis-proxy"
+    DB_HOST: "aegis-prod-rds.cluster-xxxx.us-east-1.rds.amazonaws.com"
+    DB_PORT: "5432"
+    DB_NAME: "aegis"
+    DB_USER: "aegis_api"
+    DB_SSLMODE: "require"
+    PG_MAX_OPEN_CONNS: "50"
+    PG_MAX_IDLE_CONNS: "10"
+    PG_CONN_MAX_LIFETIME: "30m"
+
+  # Production secrets (configure externally)
+  # Note: AEGIS_PROXY_JWT_SECRET is automatically configured from proxy.jwtSecret when proxy.enabled=true
+  envFromSecret:
+    DB_PASSWORD: "db-password"
+
+  # Production kubeconfig configuration
+  kubeConfigsDir: "/etc/kubeconfigs"
+  kubeConfigsSecretName: "aegis-kubeconfigs"
+  targetNamespace: "aegis-workloads"
+
+  # Cluster configurations for workload placement
+  # The platform-api uses these to connect to spoke clusters
+  # For multi-cluster deployments, add additional clusters here
+  clusters:
+    # In-cluster configuration (when platform-api runs in the same cluster as workloads)
+    aws-us-east-1-prod:
+      inCluster: true  # Uses service account token from the pod
+
+  # Additional secrets for production (values set via CI/CD)
+  secrets: {}
+    # db-password: ""  # Set via --set-string
+    # proxy-jwt-secret: ""   # Set via --set-string
+
+  # Production volume mounts
+  volumeMounts:
+    - name: kubeconfigs
+      mountPath: /etc/kubeconfigs
+      readOnly: true
+
+  volumes:
+    - name: kubeconfigs
+      secret:
+        secretName: aegis-kubeconfigs
+
+  # Production resource allocation
+  resources:
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+
+  # Health probes disabled until endpoints available
+  livenessProbe: null
+  readinessProbe: null
+
+  # Security context (disabled for now - binary permissions issue)
+  # securityContext:
+  #   runAsNonRoot: true
+  #   runAsUser: 1000
+  #   fsGroup: 2000
+
+  # containerSecurityContext:
+  #   allowPrivilegeEscalation: false
+  #   capabilities:
+  #     drop:
+  #       - ALL
+  #   readOnlyRootFilesystem: true
+  #   runAsNonRoot: true
+  #   runAsUser: 1000
+
+  # Spread across zones for availability
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - platform-api
+            topologyKey: topology.kubernetes.io/zone
+
+  migrations:
+    enabled: false
+    image:
+      repository: ghcr.io/golang-migrate/migrate
+      tag: v4.16.2
+      pullPolicy: IfNotPresent
+    ttlSecondsAfterFinished: 300
+    args:
+      - "-path=/migrations"
+      - "-database=$(DATABASE_URL)"
+      - "up"
+
+#################################################################
+# Proxy Configuration - Cloud
+#################################################################
+proxy:
+  enabled: true
+  replicaCount: 1  # Until shared JTI backend is deployed
+
+  image:
+    repository: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/proxy
+    tag: "no-client-cert"  # Updated to disable mTLS client cert requirement for VS Code
+    pullPolicy: IfNotPresent
+
+  service:
+    type: LoadBalancer
+    port: 8080
+
+  ingress:
+    enabled: false
+    className: "nginx"
+    annotations: {}
+    hosts: []
+    tls: []
+
+  # Production JWT secret (set via external secret management)
+  jwtSecret: ""  # MUST be set via --set-string in production
+  expectedAudience: "aegis-proxy"
+  allowedSuffix: ".svc.cluster.local"
+  cluster: "aws-us-east-1-prod"  # Must match the cluster ID in platformApi.clusters
+  publicHost: "proxy.yourdomain.com"
+
+  # Production secrets (configure externally)
+  # envFromSecret:
+  #   JWT_SECRET: "jwt-secret"  # Not needed - already set via AEGIS_PROXY_JWT_SECRET in template
+
+  # Additional secrets for production
+  secrets: {}
+    # custom-cert: ""  # Set via --set-string
+
+  # TLS enabled for production
+  tls:
+    enabled: false
+    cert: ""
+    key: ""
+
+  # Production environment variables
+  env:
+    LOG_LEVEL: "info"
+    ENVIRONMENT: "production"
+
+  # Production resource allocation
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+
+  # Production-grade probes
+  livenessProbe:
+    tcpSocket:
+      port: 8080
+    initialDelaySeconds: 30
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    tcpSocket:
+      port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  # Security context (disabled for now - binary permissions issue)
+  # securityContext:
+  #   runAsNonRoot: true
+  #   runAsUser: 1000
+  #   fsGroup: 2000
+
+  # containerSecurityContext:
+  #   allowPrivilegeEscalation: false
+  #   capabilities:
+  #     drop:
+  #       - ALL
+  #   readOnlyRootFilesystem: true
+  #   runAsNonRoot: true
+  #   runAsUser: 1000
+
+  # Spread across zones for availability
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - proxy
+            topologyKey: topology.kubernetes.io/zone
+
+#################################################################
+# Global Production Settings
+#################################################################
+global:
+  # Use image pull secrets for private registries
+  imagePullSecrets:
+    - name: ecr-registry-secret

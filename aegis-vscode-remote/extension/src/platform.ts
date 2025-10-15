@@ -162,6 +162,11 @@ class PlatformClient {
       }
     }
     out.appendLine('[platform] creating secure gRPC client');
+    if (ca) {
+      out.appendLine(`[platform] loaded CA bundle (${security.caPath}) length=${ca.length}`);
+    } else if (security.caPath) {
+      out.appendLine(`[platform] WARNING: no CA loaded from ${security.caPath}`);
+    }
     return grpc.credentials.createSsl(ca);
   }
 

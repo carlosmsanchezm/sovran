@@ -1,0 +1,63 @@
+# Default values for aegis-spoke.
+
+k8sAgent:
+  replicaCount: 1
+  image:
+    repository: carlosmsanchez/aegis-k8s-agent
+    pullPolicy: IfNotPresent
+    tag: "latest"
+
+  # Environment variables for the k8s-agent container
+  # These will connect the agent back to the central hub
+  env:
+    AEGIS_CLUSTER_ID: "dev-1"
+    AEGIS_CP_GRPC: "host.docker.internal:8081"
+    AEGIS_PROXY_INGRESS_HOST: "" # Will be overridden from proxy.ingress.hostname at render time
+
+    # Geographic metadata for workload placement
+    AEGIS_REGION: "us-east-1"  # AWS region where this cluster is deployed (us-east-1, us-west-2, eu-west-1, etc.)
+    AEGIS_PROVIDER: "aws"      # Cloud provider (aws, gcp, azure, on-prem, etc.)
+
+    # Compute flavors this cluster can support
+    # Comma-separated list of flavor names this cluster advertises
+    # Platform API uses these for workload placement decisions
+    # Examples: "cpu-small,cpu-large,gpu-a100,gpu-h100"
+    AEGIS_FLAVORS: "cpu-small" # Default to cpu-small for development clusters
+
+proxy:
+  replicaCount: 1
+  image:
+    repository: carlosmsanchez/aegis-proxy
+    pullPolicy: IfNotPresent
+    tag: "latest"
+
+  service:
+    type: ClusterIP
+    port: 8085
+
+  ingress:
+    enabled: true
+    className: "nginx"
+    # The public hostname for the proxy. This is a critical value.
+    # For local testing: "proxy.127.0.0.1.nip.io" or "proxy.localtest.me"
+    # In production, e.g.: "proxy.customer-a.aegis.dev"
+    hostname: "proxy.localtest.me"
+    annotations: {}
+      # kubernetes.io/ingress.class: nginx
+      # cert-manager.io/cluster-issuer: letsencrypt-prod
+
+  # Secret containing the JWT signing key for the proxy
+  # In real deployments, manage via Sealed Secrets, External Secrets, or Vault.
+  jwtSecret: "a-very-secret-key-for-local-dev-must-be-32-chars"
+
+  tls:
+    terminateAtIngress: false
+    cert: "" # Provide via --set-file proxy.tls.cert=/path/to/cert or external secret
+    key: ""  # Provide via --set-file proxy.tls.key=/path/to/key or external secret
+
+# RBAC settings for the k8s-agent
+rbac:
+  create: true
+  serviceAccount:
+    create: true
+    name: "aegis-k8s-agent"

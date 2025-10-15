@@ -1,0 +1,22 @@
+# Overrides for cloud / ingress-terminated TLS deployments.
+
+k8sAgent:
+  image:
+    repository: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/k8s-agent
+    tag: "amd64"
+  env:
+    AEGIS_CLUSTER_ID: "aws-us-east-1-prod"
+    # TODO: Update this to your actual platform-api endpoint when deployed to cloud
+    # For local development, use: "host.docker.internal:8081"
+    # For cloud deployment, use your platform-api service URL
+    AEGIS_CP_GRPC: "YOUR_PLATFORM_API_ENDPOINT:8081"
+    AEGIS_PROXY_INGRESS_HOST: "a9ada300f6ee041f9be0f1ce0b8a759b-1516746039.us-east-1.elb.amazonaws.com"
+
+proxy:
+  image:
+    repository: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/proxy
+    tag: "amd64"
+  ingress:
+    hostname: "a9ada300f6ee041f9be0f1ce0b8a759b-1516746039.us-east-1.elb.amazonaws.com"
+  tls:
+    terminateAtIngress: true

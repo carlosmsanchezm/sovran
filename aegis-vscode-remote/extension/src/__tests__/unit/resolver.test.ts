@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import * as fs from 'fs';
-import * as resolverModule from '../../resolver';
+import * as os from 'os';
+import * as path from 'path';
+import { AegisResolver, forceReconnect } from '../../resolver';
 import { ConnectionManager } from '../../connection';
 import * as platform from '../stubs/platform.stub';
 import * as config from '../stubs/config.stub';
 import { out } from '../stubs/ui.stub';
-
-const { AegisResolver } = resolverModule;
 
 function createEmitter<T>() {
   const listeners: Array<(value: T) => void> = [];
@@ -122,6 +122,126 @@ describe('AegisResolver', () => {
     expect(out.appendLine).toHaveBeenCalledWith(expect.stringContaining('failed to read CA bundle'));
   });
 
+  test('handles diverse proxy url formats', async () => {
+    jest.spyOn(config, 'getSettings').mockReturnValue({
+      heartbeatIntervalMs: 200,
+      idleTimeoutMs: 600,
+      logLevel: 'debug',
+      security: { rejectUnauthorized: false, caPath: '' },
+      defaultWorkspaceId: 'wid',
+    });
+
+    jest.spyOn(ConnectionManager.prototype, 'open').mockImplementation(async () => ({
+      onDidReceiveMessage: jest.fn(),
+      onDidClose: jest.fn(),
+      onDidEnd: jest.fn(),
+      send: jest.fn(),
+      end: jest.fn(),
+    } as any));
+
+    const cases = [
+      { proxyUrl: 'proxy.example.com', expected: 'wss://proxy.example.com/proxy/wid' },
+      { proxyUrl: 'http://host/proxy', expected: 'wss://host/proxy/wid' },
+      { proxyUrl: 'https://host/proxy/wid', expected: 'wss://host/proxy/wid' },
+      { proxyUrl: 'http://host/custom/proxy/path', expected: 'wss://host/custom/proxy/path' },
+    ];
+
+    for (const { proxyUrl, expected } of cases) {
+      (out.appendLine as jest.Mock).mockClear();
+      jest.spyOn(platform, 'issueProxyTicket').mockResolvedValue({
+        proxyUrl,
+        jwt: 'jwt',
+        ttlSeconds: 0,
+      });
+
+      const result = await AegisResolver.resolve('aegis+wid', { resolveAttempt: 1 } as any);
+      await (result as any).opener();
+
+      const log = (out.appendLine as jest.Mock).mock.calls.find(([msg]) => String(msg).includes('got ticket'));
+      expect(log?.[0]).toContain(expected);
+    }
+  });
+
+  test('merges CA sources and sets client cert options', async () => {
+    const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'aegis-ca-'));
+    const caPath = path.join(tempDir, 'ca.pem');
+    await fs.promises.writeFile(caPath, 'file-ca');
+
+    jest.spyOn(config, 'getSettings').mockReturnValue({
+      heartbeatIntervalMs: 200,
+      idleTimeoutMs: 600,
+      logLevel: 'debug',
+      security: { rejectUnauthorized: true, caPath },
+      defaultWorkspaceId: 'wid',
+    });
+
+    const constructed: Array<{ url: string; opts: any }> = [];
+    jest.spyOn(ConnectionManager.prototype, 'open').mockImplementation(function (this: any) {
+      const transport = {
+        onDidReceiveMessage: createEmitter<Uint8Array>().event,
+        onDidClose: createEmitter<Error | undefined>().event,
+        onDidEnd: createEmitter<void>().event,
+        send: jest.fn(),
+        end: jest.fn(),
+      };
+      constructed.push({ url: (this as any).url, opts: (this as any).opts });
+      return Promise.resolve(transport as any);
+    });
+
+    jest.spyOn(platform, 'issueProxyTicket').mockResolvedValue({
+      proxyUrl: 'https://host.example.com',
+      jwt: 'jwt',
+      ttlSeconds: 0,
+      caPem: 'ticket-ca',
+      certPem: 'cert',
+      keyPem: 'key',
+      serverName: 'server.name',
+    } as any);
+
+    try {
+      const result = await AegisResolver.resolve('aegis+wid', { resolveAttempt: 1 } as any);
+      await (result as any).opener();
+
+      expect(constructed).toHaveLength(1);
+      const tls = constructed[0].opts.tls;
+      expect(Array.isArray(tls.ca)).toBe(true);
+      expect((tls.ca as Buffer[]).map((buf: Buffer) => buf.toString())).toEqual(['ticket-ca', 'file-ca']);
+      expect(Buffer.isBuffer(tls.cert) && tls.cert.toString()).toBe('cert');
+      expect(Buffer.isBuffer(tls.key) && tls.key.toString()).toBe('key');
+      expect(tls.servername).toBe('server.name');
+    } finally {
+      await fs.promises.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('surface error for missing or invalid proxy url', async () => {
+    jest.spyOn(config, 'getSettings').mockReturnValue({
+      heartbeatIntervalMs: 200,
+      idleTimeoutMs: 600,
+      logLevel: 'debug',
+      security: { rejectUnauthorized: false, caPath: '' },
+      defaultWorkspaceId: 'wid',
+    });
+
+    jest.spyOn(platform, 'issueProxyTicket').mockResolvedValue({
+      proxyUrl: '',
+      jwt: 'jwt',
+      ttlSeconds: 0,
+    });
+
+    const missing = await AegisResolver.resolve('aegis+wid', { resolveAttempt: 1 } as any);
+    await expect((missing as any).opener()).rejects.toThrow('Proxy URL missing');
+
+    jest.spyOn(platform, 'issueProxyTicket').mockResolvedValue({
+      proxyUrl: '://bad',
+      jwt: 'jwt',
+      ttlSeconds: 0,
+    });
+
+    const invalid = await AegisResolver.resolve('aegis+wid', { resolveAttempt: 1 } as any);
+    await expect((invalid as any).opener()).rejects.toThrow('Invalid proxy URL');
+  });
+
   test('schedules renewal and triggers forceReconnect', async () => {
     const timeoutSpy = jest.spyOn(global, 'setTimeout');
     jest.spyOn(config, 'getSettings').mockReturnValue({
@@ -169,5 +289,40 @@ describe('AegisResolver', () => {
     expect(out.appendLine).toHaveBeenCalledWith(expect.stringContaining('renewing ticket'));
     expect(transportEnd).toBeDefined();
     expect(transportEnd?.mock.calls.length).toBe(invokeCountBefore + 1);
+  });
+
+  test('forceReconnect ends active transport once', async () => {
+    jest.spyOn(config, 'getSettings').mockReturnValue({
+      heartbeatIntervalMs: 200,
+      idleTimeoutMs: 600,
+      logLevel: 'debug',
+      security: { rejectUnauthorized: false, caPath: '' },
+      defaultWorkspaceId: 'wid',
+    });
+
+    const transport = {
+      onDidReceiveMessage: createEmitter<Uint8Array>().event,
+      onDidClose: createEmitter<Error | undefined>().event,
+      onDidEnd: createEmitter<void>().event,
+      send: jest.fn(),
+      end: jest.fn(),
+    };
+
+    jest.spyOn(ConnectionManager.prototype, 'open').mockResolvedValue(transport as any);
+    jest.spyOn(platform, 'issueProxyTicket').mockResolvedValue({
+      proxyUrl: 'https://host.example.com',
+      jwt: 'jwt',
+      ttlSeconds: 0,
+    } as any);
+
+    const result = await AegisResolver.resolve('aegis+wid', { resolveAttempt: 1 } as any);
+    await (result as any).opener();
+
+    forceReconnect();
+    expect(transport.end).toHaveBeenCalledTimes(1);
+
+    // Second call should no-op because lastEnd cleared.
+    forceReconnect();
+    expect(transport.end).toHaveBeenCalledTimes(1);
   });
 });

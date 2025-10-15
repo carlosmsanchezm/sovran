@@ -1,0 +1,21 @@
+# Auto-generated from Terraform - aegis-services (Control Plane / Hub)
+# Cluster: aegis-spoke-prod
+# Region: us-east-1
+# Generated: 2025-10-06T14:04:15Z
+
+platformApi:
+  image:
+    repository: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/platform-api
+    tag: "latest"  # TODO: Use specific version tags
+
+  env:
+    DB_HOST: "aegis-spoke-prod-db.cepmyey24yl0.us-east-1.rds.amazonaws.com"
+    DB_PORT: "5432"
+    DB_NAME: "aegis"
+    DB_USER: "aegis_api"
+    DB_SSLMODE: "require"
+
+proxy:
+  image:
+    repository: 567751785679.dkr.ecr.us-east-1.amazonaws.com/aegis/proxy
+    tag: "latest"  # TODO: Use specific version tags

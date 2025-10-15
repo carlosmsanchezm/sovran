@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../e2e-real/out",
+    "rootDir": "./suite",
+    "target": "ES2022",
+    "module": "commonjs",
+    "types": ["node", "mocha", "vscode"],
+    "inlineSourceMap": true
+  },
+  "include": ["suite/**/*.ts"],
+  "exclude": []
+}

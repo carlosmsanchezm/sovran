@@ -1,0 +1,12 @@
+# Overrides for local development.
+k8sAgent:
+  env:
+    AEGIS_CP_GRPC: "aegis-services-aegis-services-platform-api.default.svc.cluster.local:8081"
+    AEGIS_PROXY_INGRESS_HOST: "localhost:10085"
+
+proxy:
+  enabled: false  # Use aegis-services proxy for local testing
+  tls:
+    terminateAtIngress: false  # Set to false to avoid cert validation
+    cert: "dummy"
+    key: "dummy"
