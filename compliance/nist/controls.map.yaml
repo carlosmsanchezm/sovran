@@ -1,0 +1,11 @@
+controls:
+  AC-2:
+    description: "Account Management"
+    code_targets:
+      - path: "aegis-vscode-remote/extension/src/auth.ts"
+      - path: "aegis-vscode-remote/extension/src/connection.ts"
+  SC-13:
+    description: "Cryptographic Protection"
+    code_targets:
+      - path: "aegis-vscode-remote/extension/src/resolver.ts"
+      - path: "aegis-vscode-remote/proxy/src/server.ts"

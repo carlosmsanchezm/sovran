@@ -134,4 +134,32 @@ describe('auth module', () => {
     showInputBoxMock.mockResolvedValueOnce(undefined as any);
     await expect(provider.createSession(['platform'], {})).rejects.toBeInstanceOf(vscode.CancellationError);
   });
+
+  test('requireSession uses test token environment override', async () => {
+    const { auth, vscode } = await loadModules();
+    const originalToken = process.env.AEGIS_TEST_TOKEN;
+    const originalEmail = process.env.AEGIS_TEST_EMAIL;
+    try {
+      process.env.AEGIS_TEST_TOKEN = 'env-token';
+      process.env.AEGIS_TEST_EMAIL = 'env-user@example.com';
+
+      const session = await auth.requireSession(false);
+      expect(session).toBeDefined();
+      expect(session?.id).toBe('aegis-test-session');
+      expect(session?.accessToken).toBe('env-token');
+      expect(session?.account.label).toBe('env-user@example.com');
+      expect(vscode.authentication.getSession).not.toHaveBeenCalled();
+    } finally {
+      if (originalToken === undefined) {
+        delete process.env.AEGIS_TEST_TOKEN;
+      } else {
+        process.env.AEGIS_TEST_TOKEN = originalToken;
+      }
+      if (originalEmail === undefined) {
+        delete process.env.AEGIS_TEST_EMAIL;
+      } else {
+        process.env.AEGIS_TEST_EMAIL = originalEmail;
+      }
+    }
+  });
 });

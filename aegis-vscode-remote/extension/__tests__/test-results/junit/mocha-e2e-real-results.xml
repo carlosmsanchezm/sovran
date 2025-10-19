@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="Mocha Tests" time="1.278" tests="1" failures="0">
-  <testsuite name="Root Suite" timestamp="2025-10-13T18:14:53" tests="0" time="0.000" failures="0">
-  </testsuite>
-  <testsuite name="Aegis REAL backend E2E" timestamp="2025-10-13T18:14:53" tests="1" file="/Users/carlossanchez/code/sovran/aegis-vscode-remote/extension/__tests__/e2e-real/out/index.js" time="1.270" failures="0">
-    <testcase name="Aegis REAL backend E2E sign-in → ticket → heartbeat over real proxy" time="1.268" classname="sign-in → ticket → heartbeat over real proxy">
-    </testcase>
-  </testsuite>
-</testsuites>

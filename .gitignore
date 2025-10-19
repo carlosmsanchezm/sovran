@@ -8,6 +8,10 @@
 # VS Code local data directories used for testing the extension
 .vscode-aegis-data/
 .vscode-aegis-ext/
+aegis-vscode-remote/extension/__tests__/e2e/.user-data/
+aegis-vscode-remote/extension/out-e2e/
+aegis-vscode-remote/extension/test-results/
+aegis-vscode-remote/extension/__tests__/test-results/
 
 # Node / TypeScript build outputs
 node_modules/

@@ -325,4 +325,33 @@ describe('AegisResolver', () => {
     forceReconnect();
     expect(transport.end).toHaveBeenCalledTimes(1);
   });
+
+  test('resolve falls back to default workspace id when authority omits wid', async () => {
+    jest.spyOn(config, 'getSettings').mockReturnValue({
+      heartbeatIntervalMs: 100,
+      idleTimeoutMs: 400,
+      logLevel: 'info',
+      security: { rejectUnauthorized: false, caPath: '' },
+      defaultWorkspaceId: 'fallback-wid',
+    });
+
+    const ticketSpy = jest.spyOn(platform, 'issueProxyTicket').mockResolvedValue({
+      proxyUrl: 'https://proxy.example.com',
+      jwt: 'jwt',
+      ttlSeconds: 0,
+    } as any);
+
+    jest.spyOn(ConnectionManager.prototype, 'open').mockResolvedValue({
+      onDidReceiveMessage: jest.fn(),
+      onDidClose: jest.fn(),
+      onDidEnd: jest.fn(),
+      send: jest.fn(),
+      end: jest.fn(),
+    } as any);
+
+    const result = await AegisResolver.resolve('aegis', { resolveAttempt: 1 } as any);
+    await (result as any).opener();
+
+    expect(ticketSpy).toHaveBeenCalledWith('fallback-wid');
+  });
 });
