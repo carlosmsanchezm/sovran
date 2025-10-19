@@ -1,0 +1,56 @@
+repo:
+  root: "."
+  default_branch: "main"
+  code_paths:
+    - "aegis-vscode-remote/extension"
+    - "aegis-vscode-remote/proxy"
+
+jira:
+  enabled: true
+  url: "${JIRA_BASE_URL}"
+  email: "${JIRA_EMAIL}"
+  api_token: "${JIRA_API_TOKEN}"
+  single_issue_key: "MVP-4"
+  jql: 'key="MVP-4"'
+  success_label: "implemented-by-swarm"
+
+nist:
+  enabled: true
+  map_file: "compliance/nist/controls.map.yaml"
+
+git:
+  commit_author_name: "Aegis Swarm"
+  commit_author_email: "aegis-swarm@local"
+  branch_prefix: "swarm"
+  signoff: true
+
+github:
+  owner: "carlosmsanchezm"
+  repo: "sovran"
+  require_checks:
+    - "Extension TLS E2E"
+  checks_timeout_seconds: 2700
+
+local_ci:
+  env:
+    AEGIS_TEST_PROXY_URL: "https://127.0.0.1:7443"
+  steps:
+    - "npm ci"
+    - "node scripts/test/run-all.js"
+  junit_globs:
+    - "aegis-vscode-remote/extension/test-results/junit/jest-results.xml"
+    - "aegis-vscode-remote/extension/__tests__/test-results/junit/mocha-e2e-results.xml"
+  coverage_globs:
+    - "aegis-vscode-remote/extension/coverage/coverage-summary.json"
+
+guardrails:
+  max_loc_delta: 1500
+  max_file_creations: 50
+  block_patterns:
+    - "scripts that exfiltrate secrets"
+    - "unsafe eval in extension code"
+
+evidence:
+  dir: ".aegis/evidence"
+logs:
+  dir: ".aegis/logs"
