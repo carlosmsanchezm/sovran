@@ -83,6 +83,12 @@ export interface PrepareResult {
   cleanup: () => Promise<void>;
 }
 
+export interface WorkloadSummary {
+  id?: string | null;
+  status?: string | null;
+  project_id?: string | null;
+}
+
 interface CliOverrides {
   outputPath?: string;
   workspaceId?: string;
@@ -938,6 +944,26 @@ export async function cleanupWorkspace(
     }
   }
   client.close();
+}
+
+export async function listProjectWorkloads(
+  overrides: Partial<PrepareOptions> = {},
+  cliOverrides: CliOverrides = {},
+): Promise<WorkloadSummary[]> {
+  const options = await buildOptions(overrides, cliOverrides);
+  const client = await loadPlatformClient(options);
+  const metadata = buildMetadata(options);
+  try {
+    const response = await callUnary<{ items?: WorkloadSummary[] }>(
+      client,
+      'ListWorkloads',
+      { project_id: options.projectId },
+      metadata,
+    );
+    return response?.items ?? [];
+  } finally {
+    client.close();
+  }
 }
 
 export async function loadWorkspaceSession(sessionFile?: string): Promise<WorkspaceSessionDetails> {

@@ -143,9 +143,36 @@ suite('Aegis REAL backend E2E', function () {
     });
   });
 
-  suiteTeardown(() => {
+  suiteTeardown(async () => {
     if (sessionPayload) {
       cleanupWorkspaceOnce(sessionPayload);
+    }
+
+    // eslint-disable-next-line global-require, @typescript-eslint/no-var-requires
+    const { listProjectWorkloads } = require('../../../scripts/prepare-real-workspace') as {
+      listProjectWorkloads: () => Promise<Array<{ id?: string | null; status?: string | null }>>;
+    };
+
+    const prefix = process.env.AEGIS_WORKSPACE_ID_PREFIX || 'w-vscode-e2e-';
+    const terminalStatuses = new Set(['DELETED', 'FAILED', 'SUCCEEDED', 'CANCELLED']);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const workloads = await listProjectWorkloads();
+      const leaked = workloads.filter((item) => {
+        const id = (item?.id ?? '').trim();
+        if (!id.startsWith(prefix)) {
+          return false;
+        }
+        const status = (item?.status ?? '').toUpperCase();
+        return !terminalStatuses.has(status);
+      });
+      if (leaked.length === 0) {
+        return;
+      }
+      if (attempt === 4) {
+        const details = leaked.map((item) => `${item.id ?? 'unknown'}:${item.status ?? 'UNKNOWN'}`).join(', ');
+        throw new Error(`Lingering workloads detected after cleanup: ${details}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   });
 
@@ -206,6 +233,10 @@ suite('Aegis REAL backend E2E', function () {
       const authModule = require(path.join(outDir, 'auth.js'));
 
       await authModule.requireSession(true);
+      const availableWorkspaces = await platform.listWorkspaces();
+      assert.ok(Array.isArray(availableWorkspaces), 'listWorkspaces did not return an array');
+      const listedWorkspace = availableWorkspaces.find((ws: { id?: string }) => ws?.id === workspaceId);
+      assert.ok(listedWorkspace, `Provisioned workspace ${workspaceId} not returned by listWorkspaces()`);
       const available = await platform.listWorkspaces();
       assert.ok(
         Array.isArray(available),
@@ -222,9 +253,17 @@ suite('Aegis REAL backend E2E', function () {
       while (attempt < Math.max(maxAttempts, 1)) {
         attempt += 1;
         try {
-          const ticket = await platform.issueProxyTicket(workspaceId);
-          assert.ok(ticket?.proxyUrl, 'issueProxyTicket did not return proxyUrl');
-          assert.ok(ticket?.jwt, 'issueProxyTicket did not return jwt');
+        const ticket = await platform.issueProxyTicket(workspaceId);
+        assert.ok(ticket?.proxyUrl, 'issueProxyTicket did not return proxyUrl');
+        assert.ok(ticket?.jwt, 'issueProxyTicket did not return jwt');
+        if (process.env.AEGIS_E2E_DEBUG === '1') {
+          console.log('[real-e2e] ticket material', {
+            hasCa: Boolean(ticket?.caPem),
+            hasCert: Boolean((ticket as any)?.certPem),
+            hasKey: Boolean((ticket as any)?.keyPem),
+            serverName: (ticket as any)?.serverName ?? null,
+          });
+        }
 
           const url = buildWebSocketUrl(ticket.proxyUrl, workspaceId);
           console.log(`[real-e2e] proxyUrl from ticket attempt ${attempt}`, ticket.proxyUrl);
@@ -279,12 +318,18 @@ suite('Aegis REAL backend E2E', function () {
               transport = undefined;
             }
           }
-          if (success) {
-            const metrics = conn.getMetrics();
-            assert.ok(metrics.lastClose, 'Expected metrics.lastClose after disconnect');
-            lastError = undefined;
-            break;
+        if (success) {
+          const metrics = conn.getMetrics();
+          assert.ok(metrics.lastClose, 'Expected metrics.lastClose after disconnect');
+          const renewal = await platform.issueProxyTicket(workspaceId);
+          assert.ok(renewal?.proxyUrl, 'Renewed ticket missing proxy URL');
+          assert.ok(renewal?.jwt, 'Failed to renew proxy ticket');
+          if (ticket.jwt && renewal?.jwt) {
+            assert.notStrictEqual(renewal.jwt, ticket.jwt, 'Renewed proxy ticket should be distinct from initial ticket');
           }
+          lastError = undefined;
+          break;
+        }
         } catch (err) {
           lastError = err;
           if (attempt < Math.max(maxAttempts, 1)) {
