@@ -96,8 +96,12 @@ interface CliOverrides {
   readyTimeoutMs?: number;
   pollIntervalMs?: number;
   workspacePrefix?: string;
-  mode?: 'prepare' | 'cleanup';
+  mode?: 'prepare' | 'cleanup' | 'list';
   sessionFile?: string;
+}
+
+interface ListWorkloadsResult {
+  items?: WorkloadSummary[];
 }
 
 const DEFAULT_OUTPUT_PATH = path.resolve(__dirname, '../__tests__/e2e-real/.workspace-session.json');
@@ -141,8 +145,8 @@ function parseArgs(argv: string[]): CliOverrides {
         overrides.sessionFile = nextValue;
         break;
       case '--mode':
-        if (nextValue === 'cleanup') {
-          overrides.mode = 'cleanup';
+        if (nextValue === 'cleanup' || nextValue === 'list') {
+          overrides.mode = nextValue as CliOverrides['mode'];
         } else {
           overrides.mode = 'prepare';
         }
@@ -979,6 +983,13 @@ async function main(): Promise<void> {
     const session = await loadWorkspaceSession(cli.sessionFile);
     await cleanupWorkspace(session, {});
     console.log('[prepare-real-workspace] cleaned workspace', session.workspace_id);
+    return;
+  }
+
+  if (mode === 'list') {
+    const workloads = await listProjectWorkloads({ allowCleanupHook: false }, cli);
+    const payload: ListWorkloadsResult = { items: workloads };
+    console.log(JSON.stringify(payload, null, 2));
     return;
   }
 
