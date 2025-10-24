@@ -32,7 +32,7 @@
     "test:e2e": "node ./scripts/build-e2e-runner.js && node ./__tests__/e2e/run-vscode-tests.js",
     "build:test-e2e": "tsc -p tsconfig.e2e.json",
     "build:test-e2e:real": "tsc -p __tests__/e2e-real/tsconfig.json",
-    "test:e2e:real": "npm run build && npm run build:test-e2e:real && node ./__tests__/e2e/run-vscode-tests-real.js"
+    "test:e2e:real": "npm run build && npm run build:test-e2e:real && ts-node ./scripts/prepare-real-workspace.ts && node ./__tests__/e2e/run-vscode-tests-real.js"
   },
   "contributes": {
     "commands": [
@@ -185,6 +185,7 @@
     "tmp": "^0.2.3",
     "jest-junit": "^16.0.0",
     "mocha-junit-reporter": "^2.2.0",
-    "@types/rewire": "^2.5.28"
+    "@types/rewire": "^2.5.28",
+    "ts-node": "^10.9.2"
   }
 }
