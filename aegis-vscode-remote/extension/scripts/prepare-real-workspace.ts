@@ -3,9 +3,13 @@ import * as fs from 'fs';
 import { promises as fsp } from 'fs';
 import * as path from 'path';
 import crypto from 'crypto';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { downloadAndUnzipVSCode } from '@vscode/test-electron';
+
+const execFileAsync = promisify(execFile);
 
 type PlatformClient = grpc.Client & Record<string, unknown>;
 
@@ -232,6 +236,33 @@ async function resolveVsCodeCommit(quality: string, debugLogs: boolean): Promise
           console.log('[prepare-real-workspace] resolved VS Code commit', product.commit);
         }
         return product.commit;
+      }
+    }
+
+    const binaries = [
+      path.join(root, 'bin', 'code'),
+      path.join(root, 'code'),
+      path.join(root, 'Contents', 'Resources', 'app', 'bin', 'code'),
+      path.join(root, 'Visual Studio Code.app', 'Contents', 'Resources', 'app', 'bin', 'code'),
+    ];
+    for (const binary of binaries) {
+      if (!fs.existsSync(binary)) {
+        continue;
+      }
+      try {
+        const { stdout } = await execFileAsync(binary, ['--version']);
+        const lines = stdout.trim().split(/\r?\n/);
+        const commitLine = lines[1]?.trim();
+        if (commitLine && /^[0-9a-f]{40}$/i.test(commitLine)) {
+          if (debugLogs) {
+            console.log('[prepare-real-workspace] resolved VS Code commit via binary', commitLine);
+          }
+          return commitLine;
+        }
+      } catch (err) {
+        if (debugLogs) {
+          console.warn('[prepare-real-workspace] failed to resolve commit via binary', binary, err);
+        }
       }
     }
   } catch (err) {
