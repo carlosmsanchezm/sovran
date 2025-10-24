@@ -86,9 +86,8 @@ Export the following variables before invoking the test command:
 - `AEGIS_TEST_TOKEN` – Bearer token with permission to upsert queues and submit workspaces.
 - `AEGIS_TEST_EMAIL` – Subject used for platform metadata headers.
 - `AEGIS_PROJECT_ID` – Project under which the workspace should run.
-  - Optional knobs:
+- Optional knobs:
   - `AEGIS_PLATFORM_NAMESPACE` (defaults to `default`).
-  - `AEGIS_WORKSPACE_NAMESPACE` (defaults to `aegis-workloads-local`) if your cluster uses a different namespace for `Workspace` CRs.
   - `AEGIS_CA_PEM` (filesystem path) or `AEGIS_CA_PEM_INLINE` (PEM string) for custom trust roots.
   - `AEGIS_TLS_SKIP_VERIFY=1` to disable TLS verification (only for dev endpoints).
   - `AEGIS_TEST_QUEUE`, `AEGIS_TEST_FLAVOR`, `AEGIS_TEST_IMAGE`, `AEGIS_TEST_CLUSTER_ID` for bespoke infra setups.
