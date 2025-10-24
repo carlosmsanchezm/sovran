@@ -6,6 +6,10 @@ import crypto from 'crypto';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { downloadAndUnzipVSCode } from '@vscode/test-electron';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 type PlatformClient = grpc.Client & Record<string, unknown>;
 
@@ -76,6 +80,7 @@ export interface PrepareOptions {
   caOutputPath: string;
   allowCleanupHook: boolean;
   readyStabilizationMs: number;
+  workspaceNamespace?: string;
 }
 
 export interface PrepareResult {
@@ -481,20 +486,25 @@ class WorkspaceManager {
           continue;
         }
         if (wid === this.workspaceId || wid.startsWith(this.opts.workspaceIdPrefix)) {
-          try {
-            await callUnary(this.client, 'AckWorkload', {
-              id: wid,
-              status: 'FAILED',
-              backend: 'vscode-e2e-cleanup',
-            }, this.metadata);
-            if (this.opts.debugLogs) {
-              console.log('[prepare-real-workspace] acknowledged stale workspace', wid);
-            }
-          } catch (err) {
-            if (this.opts.debugLogs) {
-              console.warn('[prepare-real-workspace] failed to acknowledge stale workspace', wid, err);
+          const statuses = ['FAILED', 'CANCELLED', 'DELETED', 'SUCCEEDED'];
+          for (const status of statuses) {
+            try {
+              await callUnary(this.client, 'AckWorkload', {
+                id: wid,
+                status,
+                backend: 'vscode-e2e-cleanup',
+              }, this.metadata);
+              if (this.opts.debugLogs) {
+                console.log('[prepare-real-workspace] acknowledged stale workspace', wid, 'with status', status);
+              }
+              break;
+            } catch (err) {
+              if (this.opts.debugLogs) {
+                console.warn('[prepare-real-workspace] failed to acknowledge stale workspace', wid, 'with status', status, err);
+              }
             }
           }
+          await deleteWorkspaceCrd(this.opts.workspaceNamespace, wid, this.opts.debugLogs);
         }
       }
     } catch (err) {
@@ -735,6 +745,8 @@ class WorkspaceManager {
     }
 
     this.client.close();
+
+    await deleteWorkspaceCrd(this.opts.workspaceNamespace, this.workspaceId, this.opts.debugLogs);
   }
 }
 
@@ -894,6 +906,7 @@ async function buildOptions(overrides: Partial<PrepareOptions>, cli: CliOverride
     debugLogs,
     caOutputPath,
     allowCleanupHook,
+    workspaceNamespace: overrides.workspaceNamespace ?? env.AEGIS_WORKSPACE_NAMESPACE ?? 'aegis-workloads-local',
   };
 }
 
@@ -963,6 +976,22 @@ export async function listProjectWorkloads(
     return response?.items ?? [];
   } finally {
     client.close();
+  }
+}
+
+async function deleteWorkspaceCrd(namespace: string | undefined, workloadId: string, debugLogs: boolean): Promise<void> {
+  if (!namespace) {
+    return;
+  }
+  try {
+    await execFileAsync('kubectl', ['delete', 'workspace', workloadId, '-n', namespace, '--ignore-not-found']);
+    if (debugLogs) {
+      console.log('[prepare-real-workspace] deleted workspace CR via kubectl', workloadId);
+    }
+  } catch (err) {
+    if (debugLogs) {
+      console.warn('[prepare-real-workspace] kubectl delete workspace failed', workloadId, err);
+    }
   }
 }
 

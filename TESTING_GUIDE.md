@@ -17,6 +17,7 @@ Use the npm automation to provision a disposable workspace against the live Plat
    export AEGIS_PROJECT_ID=p-demo
    # Optional TLS / infra knobs
    export AEGIS_PLATFORM_NAMESPACE=default
+   export AEGIS_WORKSPACE_NAMESPACE=aegis-workloads-local
    export AEGIS_CA_PEM=/path/to/ca.pem
    export AEGIS_TEST_CLUSTER_ID=cluster-dev
    ```
