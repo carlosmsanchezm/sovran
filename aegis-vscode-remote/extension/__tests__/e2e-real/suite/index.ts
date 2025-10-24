@@ -1,7 +1,8 @@
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
-import { spawnSync } from 'child_process';
+import { spawnSync, execFile } from 'child_process';
+import { promisify } from 'util';
 import * as vscode from 'vscode';
 
 const extensionRoot = path.resolve(__dirname, '../../../');
@@ -55,6 +56,13 @@ function cleanupWorkspaceOnce(session: WorkspaceSessionPayload): void {
     console.warn('[real-e2e] cleanup helper threw', err);
   }
 }
+
+interface WorkloadSummary {
+  id?: string | null;
+  status?: string | null;
+}
+
+const execFileAsync = promisify(execFile);
 
 let sessionPayload: WorkspaceSessionPayload | undefined;
 
@@ -148,15 +156,26 @@ suite('Aegis REAL backend E2E', function () {
       cleanupWorkspaceOnce(sessionPayload);
     }
 
-    // eslint-disable-next-line global-require, @typescript-eslint/no-var-requires
-    const { listProjectWorkloads } = require('../../../scripts/prepare-real-workspace') as {
-      listProjectWorkloads: () => Promise<Array<{ id?: string | null; status?: string | null }>>;
+    const listProjectWorkloadsCli = async (): Promise<WorkloadSummary[]> => {
+      const tsNodeRegister = require.resolve('ts-node/register');
+      const scriptPath = path.resolve(extensionRoot, 'scripts/prepare-real-workspace.ts');
+      try {
+        const { stdout } = await execFileAsync(process.execPath, ['-r', tsNodeRegister, scriptPath, '--mode', 'list'], {
+          cwd: extensionRoot,
+          env: process.env,
+        });
+        const parsed = JSON.parse(stdout) as { items?: WorkloadSummary[] };
+        return Array.isArray(parsed?.items) ? parsed.items : [];
+      } catch (err) {
+        console.warn('[real-e2e] failed to list workloads via helper', err);
+        return [];
+      }
     };
 
     const prefix = process.env.AEGIS_WORKSPACE_ID_PREFIX || 'w-vscode-e2e-';
     const terminalStatuses = new Set(['DELETED', 'FAILED', 'SUCCEEDED', 'CANCELLED']);
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      const workloads = await listProjectWorkloads();
+      const workloads = await listProjectWorkloadsCli();
       const leaked = workloads.filter((item) => {
         const id = (item?.id ?? '').trim();
         if (!id.startsWith(prefix)) {
