@@ -95,9 +95,11 @@ Export the following variables before invoking the test command:
 
 ### Run the Suite
 
+
 ```
 npm install
-npm run test:e2e:real
+cp .env.real-e2e.example .env.real-e2e  # fill in your cluster/token details once
+./scripts/run-real-e2e.sh                # sources .env.real-e2e and runs npm run test:e2e:real
 ```
 
 The script executes the following steps:
@@ -106,6 +108,7 @@ The script executes the following steps:
 2. Runs `ts-node ./scripts/prepare-real-workspace.ts`, which upserts the demo project/queue, submits an interactive workspace, polls until it reaches `RUNNING`, and writes a ticket to `__tests__/e2e-real/.workspace-session.json` (override with `AEGIS_WORKSPACE_OUTPUT`).
 3. Launches the VS Code smoke tests; they consume the session payload, configure TLS (copying the CA bundle to `__tests__/e2e-real/workspace-ca-from-session.pem` when needed), and verify the heartbeat over the real proxy.
 4. Invokes the helper in cleanup mode on exit so the workspace is acknowledged/deleted even when tests fail.
+5. Confirms the provisioned workspace is visible via `listWorkspaces()`, renews the proxy ticket, and ensures no non-terminal `w-vscode-e2e-*` workloads linger after the run.
 
 Artifacts:
 
