@@ -50,4 +50,5 @@ aegis-vscode-remote/extension/__tests__/logs-real/
 aegis-vscode-remote/extension/__tests__/.user-data-real/
 aegis-vscode-remote/extension/__tests__/e2e-real/.workspace-session.json
 aegis-vscode-remote/extension/__tests__/e2e-real/workspace-ca-from-session.pem
+aegis-vscode-remote/extension/.env.real-e2e
 .tls/

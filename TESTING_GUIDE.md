@@ -24,7 +24,8 @@ Use the npm automation to provision a disposable workspace against the live Plat
    ```bash
    cd aegis-vscode-remote/extension
    npm install
-   npm run test:e2e:real
+   cp .env.real-e2e.example .env.real-e2e  # edit once with your credentials
+   ./scripts/run-real-e2e.sh               # wraps npm run test:e2e:real
    ```
 3. Inspect artifacts:
    - Session JSON: `__tests__/e2e-real/.workspace-session.json`
