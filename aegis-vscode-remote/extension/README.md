@@ -97,6 +97,8 @@ Export the following variables before invoking the test command:
 
 ```
 npm install
+# Ensure no stale workspaces are running (optional but recommended)
+kubectl delete workspace -n aegis-workloads-local --all 2>/dev/null || true
 npm run test:e2e:real
 ```
 
@@ -114,3 +116,8 @@ Artifacts:
 - VS Code host logs: `__tests__/logs-real/` (set `AEGIS_E2E_DEBUG=1` to print log tails on failure).
 
 If provisioning fails, re-run the command—the helper is idempotent and purges leftover `w-vscode-e2e-*` workloads before starting over.
+If you see repeated `Timed out waiting for workspace ... to reach RUNNING` errors, clear any existing `w-vscode-e2e-*` entries:
+
+```
+kubectl delete workspace -n aegis-workloads-local --all
+```

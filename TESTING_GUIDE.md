@@ -24,6 +24,7 @@ Use the npm automation to provision a disposable workspace against the live Plat
    ```bash
    cd aegis-vscode-remote/extension
    npm install
+   kubectl delete workspace -n aegis-workloads-local --all  # optional cleanup
    npm run test:e2e:real
    ```
 3. Inspect artifacts:
