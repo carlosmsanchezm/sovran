@@ -276,6 +276,41 @@ jobs:
           aws eks update-kubeconfig --region "${AWS_REGION}" --name "aegis-spoke-${{ needs.deploy-preview.outputs.preview_release }}"
         if: ${{ needs.deploy-preview.result == 'success' }}
 
+      - name: Wait for cluster readiness
+        run: |
+          set -euo pipefail
+          # Wait for all nodes to become Ready
+          echo "Waiting for worker nodes to register"
+          node_ready=0
+          for attempt in $(seq 1 60); do
+            count=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)
+            if [ "$count" -gt 0 ]; then
+              node_ready=1
+              break
+            fi
+            sleep 10
+          done
+          if [ "$node_ready" -ne 1 ]; then
+            echo "Nodes never registered with the cluster";
+            kubectl get nodes -o wide || true;
+            exit 1;
+          fi
+          kubectl wait --for=condition=Ready nodes --all --timeout=600s || {
+            echo "Node readiness check timed out; dumping node status";
+            kubectl get nodes -o wide;
+            exit 1;
+          }
+          # Wait for workload namespace creation (if any)
+          kubectl get namespace aegis-workloads >/dev/null 2>&1 || true
+          # Wait for the core preview deployments to be available
+          NS="${{ needs.deploy-preview.outputs.preview_namespace }}"
+          kubectl -n "$NS" wait --for=condition=Available deployment --all --timeout=600s || {
+            echo "Timed out waiting for deployments; dumping pod status";
+            kubectl -n "$NS" get pods -o wide;
+            exit 1;
+          }
+        if: ${{ needs.deploy-preview.result == 'success' }}
+
       - name: Install dependencies
         working-directory: aegis-vscode-remote/extension
         run: npm ci
@@ -309,7 +344,7 @@ jobs:
 
   teardown:
     name: Teardown Preview Environment
-    if: ${{ always() }}
+    if: ${{ needs.extension-e2e.result == 'success' }}
     runs-on: ubuntu-latest
     needs:
       - deploy-preview
