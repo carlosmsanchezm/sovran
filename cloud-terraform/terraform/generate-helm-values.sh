@@ -35,6 +35,11 @@ IFS='|' read -r PLATFORM_API_IMAGE_REPO PLATFORM_API_IMAGE_TAG_VALUE <<< "$(pars
 IFS='|' read -r PROXY_IMAGE_REPO PROXY_IMAGE_TAG_VALUE <<< "$(parse_image_ref "${PROXY_IMAGE_TAG:-}")"
 IFS='|' read -r K8S_AGENT_IMAGE_REPO K8S_AGENT_IMAGE_TAG_VALUE <<< "$(parse_image_ref "${K8S_AGENT_IMAGE_TAG:-}")"
 
+CONTROL_PLANE_GRPC_PORT=${CONTROL_PLANE_GRPC_PORT:-8081}
+CONTROL_PLANE_SERVICE_HOST="${PLATFORM_API_RELEASE_NAME}.${K8S_NAMESPACE}.svc.cluster.local"
+CONTROL_PLANE_GRPC_ENDPOINT="${CONTROL_PLANE_SERVICE_HOST}:${CONTROL_PLANE_GRPC_PORT}"
+CONTROL_PLANE_CLUSTER_ID=${CONTROL_PLANE_CLUSTER_ID:-"aegis-spoke-${RELEASE_BASENAME}"}
+
 usage() {
 cat <<'EOF'
 Usage: ./generate-helm-values.sh [--tls] [--non-interactive]
@@ -754,6 +759,11 @@ if [[ $TLS_MODE -eq 1 ]]; then
   echo "   ℹ️  Including TLS overlay for k8s-agent (values-cloud-tls.yaml)"
   SPOKE_HELM_ARGS+=( -f ./aegis-spoke/values-cloud-tls.yaml )
 fi
+
+echo "   ℹ️  Configuring k8s-agent control plane endpoint: ${CONTROL_PLANE_GRPC_ENDPOINT}"
+SPOKE_HELM_ARGS+=( --set-string "k8sAgent.env.AEGIS_CP_GRPC=${CONTROL_PLANE_GRPC_ENDPOINT}" )
+echo "   ℹ️  Configuring k8s-agent cluster id: ${CONTROL_PLANE_CLUSTER_ID}"
+SPOKE_HELM_ARGS+=( --set-string "k8sAgent.env.AEGIS_CLUSTER_ID=${CONTROL_PLANE_CLUSTER_ID}" )
 
 SPOKE_HELM_ARGS+=(
   --set k8sAgent.enabled=true
