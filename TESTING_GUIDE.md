@@ -5,6 +5,37 @@
 - VS Code installed (currently using stable, not Insiders)
 - Node.js and npm installed
 
+## Automated Real Backend Tests
+
+Use the npm automation to provision a disposable workspace against the live Platform API and run the VS Code heartbeat suite. This flow requires no manual `kubectl` or shell scripting.
+
+1. Export real-backend credentials:
+   ```bash
+   export AEGIS_GRPC_ADDR=platform.example.com:443
+   export AEGIS_TEST_TOKEN=$(aws secretsmanager get-secret-value ...)
+   export AEGIS_TEST_EMAIL=dev-user@example.com
+   export AEGIS_PROJECT_ID=p-demo
+   # Optional TLS / infra knobs
+   export AEGIS_PLATFORM_NAMESPACE=default
+   export AEGIS_CA_PEM=/path/to/ca.pem
+   export AEGIS_TEST_CLUSTER_ID=cluster-dev
+   ```
+2. Install dependencies and run the suite:
+   ```bash
+   cd aegis-vscode-remote/extension
+   npm install
+   kubectl delete workspace -n aegis-workloads-local --all  # optional cleanup
+   npm run test:e2e:real
+   ```
+3. Inspect artifacts:
+   - Session JSON: `__tests__/e2e-real/.workspace-session.json`
+   - CA bundle copy: `__tests__/e2e-real/workspace-ca-from-session.pem`
+   - VS Code logs: `__tests__/logs-real/`
+
+The helper retries transient provisioning failures, polls for `RUNNING` status (default timeout ≈ 8 minutes), and acknowledges/deletes the workspace on exit by calling the Platform `AckWorkload` API. Re-running the command is safe; any stale `w-vscode-e2e-*` workloads are cleaned up during startup.
+
+---
+
 ## Setup Complete ✅
 
 The following have been completed:
