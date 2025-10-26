@@ -240,13 +240,32 @@ async function resolveVsCodeCommit(quality: string, debugLogs: boolean): Promise
     }
 
     const binaries = [
+      root,
+      path.join(path.dirname(root), 'bin', 'code'),
       path.join(root, 'bin', 'code'),
       path.join(root, 'code'),
       path.join(root, 'Contents', 'Resources', 'app', 'bin', 'code'),
       path.join(root, 'Visual Studio Code.app', 'Contents', 'Resources', 'app', 'bin', 'code'),
     ];
-    for (const binary of binaries) {
+    const seen = new Set<string>();
+    for (const candidate of binaries) {
+      const binary = path.normalize(candidate);
+      if (seen.has(binary)) {
+        continue;
+      }
+      seen.add(binary);
       if (!fs.existsSync(binary)) {
+        continue;
+      }
+      try {
+        const stat = fs.statSync(binary);
+        if (!stat.isFile()) {
+          continue;
+        }
+      } catch (err) {
+        if (debugLogs) {
+          console.warn('[prepare-real-workspace] failed to stat possible vscode binary', binary, err);
+        }
         continue;
       }
       try {
