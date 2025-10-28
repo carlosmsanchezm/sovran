@@ -4,7 +4,7 @@ import { out, status, WorkspacesProvider } from './ui';
 import { AegisResolver, forceReconnect, getLastConnection } from './resolver';
 import { registerDiagnostics } from './diagnostics';
 import { getSettings, onDidChangeSettings } from './config';
-import { initializeAuth, requireSession, signOut } from './auth';
+import { handleAuthUri, initializeAuth, requireSession, signOut } from './auth';
 import { initializePlatform, refreshPlatformSettings } from './platform';
 
 export async function activate(ctx: vscode.ExtensionContext) {
@@ -26,6 +26,11 @@ export async function activate(ctx: vscode.ExtensionContext) {
     vscode.window.registerUriHandler({
       handleUri: async (uri: vscode.Uri) => {
         out.appendLine(`[uri-handler] received URI: ${uri.toString()}`);
+        const handled = await handleAuthUri(uri);
+        if (handled) {
+          out.appendLine('[uri-handler] handled OAuth callback');
+          return;
+        }
 
         // Extract workspace ID from URI path (format: /aegis+w-xxxxx)
         const match = uri.path.match(/^\/aegis\+(.+)$/);

@@ -162,7 +162,25 @@ the correct commit without a manual download.
      /Users/carlossanchez/code/sovran
    ```
 
-3. **Sign in** via the extension when prompted (uses VS Code authentication providers).
+3. **Sign in** via the extension (OAuth flow).
+
+   Ensure your VS Code settings include:
+
+   ```jsonc
+   {
+     "aegisRemote.auth.authority": "https://keycloak.localtest.me/realms/aegis",
+     "aegisRemote.auth.clientId": "vscode-extension",
+     "aegisRemote.auth.redirectUri": "vscode://aegis.aegis-remote/auth"
+   }
+   ```
+
+   Launch `Cmd+Shift+P → Aegis: Sign In`. A browser window opens to Keycloak; after completing login
+   (and MFA, if configured) you are redirected back to VS Code via `vscode://aegis.aegis-remote/auth`.
+   The extension stores the issued access/refresh tokens and derives the `x-aegis-user` header from
+   token claims automatically.
+
+   > **Note:** Register the Keycloak client as public, enable Authorization Code + PKCE, and allow
+   > the redirect URI `vscode://aegis.aegis-remote/auth`.
 
 4. **Refresh workspaces** (`Aegis: Refresh Workspaces`). The tree view lists live workspaces from
    Platform API. Clicking one triggers a connection using its ID.

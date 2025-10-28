@@ -107,6 +107,39 @@
           "default": "",
           "description": "Project identifier whose interactive workspaces should be listed."
         },
+        "aegisRemote.auth.authority": {
+          "type": "string",
+          "default": "",
+          "description": "OIDC issuer / realm base URL (e.g. https://keycloak.localtest.me/realms/aegis)."
+        },
+        "aegisRemote.auth.clientId": {
+          "type": "string",
+          "default": "",
+          "description": "Public OAuth client identifier registered for the VS Code extension."
+        },
+        "aegisRemote.auth.redirectUri": {
+          "type": "string",
+          "default": "vscode://aegis.aegis-remote/auth",
+          "description": "Redirect URI configured for the Keycloak client (must match exactly)."
+        },
+        "aegisRemote.auth.scopes": {
+          "type": "array",
+          "default": [
+            "openid",
+            "profile",
+            "email",
+            "offline_access"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional OAuth scopes requested during sign-in."
+        },
+        "aegisRemote.auth.prompt": {
+          "type": "string",
+          "default": "",
+          "description": "Optional prompt parameter sent during authorization requests (e.g. \"login\" or \"consent\")."
+        },
         "aegisRemote.defaultWorkspaceId": {
           "type": "string",
           "default": "",

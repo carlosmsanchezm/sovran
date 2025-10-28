@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { promises as fs } from 'fs';
 import { getSettings, AegisSettings } from './config';
-import { requireSession } from './auth';
+import { getSessionUser, requireSession } from './auth';
 import { out } from './ui';
 
 interface WorkspaceMessage {
@@ -280,7 +280,7 @@ class PlatformClient {
   private buildMetadata(session: vscode.AuthenticationSession): grpc.Metadata {
     const metadata = new grpc.Metadata();
     metadata.add('authorization', `Bearer ${session.accessToken}`);
-    const subject = session.account?.label || session.account?.id;
+    const subject = getSessionUser(session) || session.account?.label || session.account?.id;
     if (subject) {
       metadata.add('x-aegis-user', subject);
     }
