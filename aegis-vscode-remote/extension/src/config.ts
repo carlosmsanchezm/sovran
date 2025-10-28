@@ -15,8 +15,17 @@ export interface PlatformSettings {
   projectId: string;
 }
 
+export interface AuthSettings {
+  authority: string;
+  clientId: string;
+  redirectUri: string;
+  scopes: string[];
+  prompt?: string;
+}
+
 export interface AegisSettings {
   platform: PlatformSettings;
+  auth: AuthSettings;
   defaultWorkspaceId?: string;
   heartbeatIntervalMs: number;
   idleTimeoutMs: number;
@@ -32,6 +41,13 @@ export function getSettings(): AegisSettings {
       namespace: cfg.get('platform.namespace', 'default'),
       authScope: cfg.get('platform.authScope', 'aegis-platform'),
       projectId: cfg.get('platform.projectId', ''),
+    },
+    auth: {
+      authority: cfg.get('auth.authority', ''),
+      clientId: cfg.get('auth.clientId', ''),
+      redirectUri: cfg.get('auth.redirectUri', 'vscode://aegis.aegis-remote/auth'),
+      scopes: cfg.get('auth.scopes', ['openid', 'profile', 'email', 'offline_access']),
+      prompt: cfg.get('auth.prompt', ''),
     },
     defaultWorkspaceId: cfg.get('defaultWorkspaceId', ''),
     heartbeatIntervalMs: cfg.get('heartbeatIntervalMs', 15_000),

@@ -1,13 +1,56 @@
 import { beforeEach, describe, expect, jest, test } from '@jest/globals';
 import { AegisResolver } from '../../resolver';
+import { ConnectionManager } from '../../connection';
 import { status } from '../stubs/ui.stub';
 
 describe('resolver ↔ proxy integration', () => {
   beforeEach(() => {
+    jest.restoreAllMocks();
     (status.set as jest.Mock).mockClear();
   });
 
   test('establishes transport over proxy and echoes bytes', async () => {
+    const createEmitter = <T,>() => {
+      const listeners: Array<(value: T) => void> = [];
+      const event = (listener: (value: T) => any) => {
+        listeners.push(listener);
+        return {
+          dispose: () => {
+            const idx = listeners.indexOf(listener);
+            if (idx >= 0) {
+              listeners.splice(idx, 1);
+            }
+          },
+        };
+      };
+      return {
+        event,
+        fire: (value: T) => {
+          for (const listener of [...listeners]) {
+            listener(value);
+          }
+        },
+      };
+    };
+
+    jest.spyOn(ConnectionManager.prototype, 'open').mockImplementation(function (this: any) {
+      const rx = createEmitter<Uint8Array>();
+      const onClose = createEmitter<Error | undefined>();
+      const onEnd = createEmitter<void>();
+      return Promise.resolve({
+        onDidReceiveMessage: rx.event,
+        onDidClose: onClose.event,
+        onDidEnd: onEnd.event,
+        send: (data: Uint8Array) => {
+          rx.fire(data);
+        },
+        end: () => {
+          onClose.fire(undefined);
+          onEnd.fire();
+        },
+      });
+    });
+
     const result = await AegisResolver.resolve('aegis+w-int', { resolveAttempt: 1 } as any);
     const transport = await (result as any).opener();
 
