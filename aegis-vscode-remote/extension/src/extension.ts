@@ -6,13 +6,19 @@ import { registerDiagnostics } from './diagnostics';
 import { getSettings, onDidChangeSettings } from './config';
 import { handleAuthUri, initializeAuth, requireSession, signOut } from './auth';
 import { initializePlatform, refreshPlatformSettings } from './platform';
+import { configureHttpSecurity, disposeHttpSecurity } from './http';
 
 export async function activate(ctx: vscode.ExtensionContext) {
   out.appendLine('Aegis Remote activated');
   status.set('$(circle-outline) Aegis: Idle');
 
+  const initialSettings = getSettings();
+  await configureHttpSecurity(initialSettings.security);
+
   await initializeAuth(ctx);
   await initializePlatform(ctx);
+
+  ctx.subscriptions.push(new vscode.Disposable(() => { void disposeHttpSecurity(); }));
 
   ctx.subscriptions.push(vscode.workspace.registerRemoteAuthorityResolver('aegis', AegisResolver));
   registerDiagnostics(ctx, getLastConnection);
@@ -55,6 +61,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
     onDidChangeSettings(async () => {
       const cfg = getSettings();
       out.appendLine('[settings] updated ' + JSON.stringify(cfg));
+      await configureHttpSecurity(cfg.security);
       await refreshPlatformSettings();
       provider.refresh();
     })

@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import { URLSearchParams } from 'url';
 import * as vscode from 'vscode';
 import { getSettings } from './config';
+import { getHttpDispatcher } from './http';
 
 const AUTH_PROVIDER_ID = 'aegis';
 const AUTH_PROVIDER_LABEL = 'Aegis Platform';
@@ -358,60 +359,70 @@ class AegisAuthenticationProvider implements vscode.AuthenticationProvider, vsco
   }
 
   private async exchangeAuthorizationCode(code: string, verifier: string, scope: string): Promise<PersistedSession> {
-    const settings = getSettings();
-    const { auth } = settings;
-    const tokenUrl = `${auth.authority.replace(/\/+$/u, '')}/protocol/openid-connect/token`;
-
-    const body = new URLSearchParams({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: auth.redirectUri,
-      client_id: auth.clientId,
-      code_verifier: verifier,
-    });
-
-    const response = await globalThis.fetch(tokenUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body,
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Token exchange failed (${response.status}): ${text}`);
-    }
-    const tokenResponse = (await response.json()) as TokenResponse;
+    const { auth } = getSettings();
+    const tokenResponse = await this.postTokenRequest(
+      new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: auth.redirectUri,
+        client_id: auth.clientId,
+        code_verifier: verifier,
+      }),
+      'Token exchange'
+    );
     return this.buildPersistedFromResponse(tokenResponse, scope);
   }
 
   private async refreshTokens(refreshToken: string, scope: string): Promise<PersistedSession> {
-    const settings = getSettings();
-    const { auth } = settings;
+    const { auth } = getSettings();
+    const tokenResponse = await this.postTokenRequest(
+      new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: auth.clientId,
+        scope,
+      }),
+      'Token refresh'
+    );
+    return this.buildPersistedFromResponse(tokenResponse, scope);
+  }
+
+  private async postTokenRequest(
+    body: URLSearchParams,
+    context: 'Token exchange' | 'Token refresh'
+  ): Promise<TokenResponse> {
+    const { auth } = getSettings();
     const tokenUrl = `${auth.authority.replace(/\/+$/u, '')}/protocol/openid-connect/token`;
 
-    const body = new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: auth.clientId,
-      scope,
-    });
-
-    const response = await globalThis.fetch(tokenUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body,
-    });
+    let response: Response;
+    try {
+      const dispatcher = getHttpDispatcher();
+      response = await globalThis.fetch(tokenUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body,
+        ...(dispatcher ? { dispatcher } : {}),
+      });
+    } catch (err) {
+      let reason = err instanceof Error ? err.message : String(err);
+      const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
+      if (cause instanceof Error && cause.message) {
+        reason += ` (${cause.message})`;
+      }
+      throw new Error(
+        `${context} failed: ${reason}. Verify the Keycloak URL, client configuration, and TLS trust (aegisRemote.security.caPath).`,
+        { cause: err }
+      );
+    }
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Token refresh failed (${response.status}): ${text}`);
+      throw new Error(`${context} failed (${response.status}): ${text || 'No response body'}`);
     }
-    const tokenResponse = (await response.json()) as TokenResponse;
-    return this.buildPersistedFromResponse(tokenResponse, scope);
+
+    return (await response.json()) as TokenResponse;
   }
 
   private buildPersistedFromResponse(tokenResponse: TokenResponse, scope: string): PersistedSession {

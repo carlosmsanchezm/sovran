@@ -15,6 +15,12 @@ const extensionTestsPath = fs.existsSync(compiledTestsPath) ? compiledTestsPath 
     '--skip-welcome',
     '--skip-release-notes',
     '--enable-proposed-api=aegis.aegis-remote',
+    '--no-sandbox',
+    '--disable-gpu',
+    '--disable-software-rasterizer',
+    '--disable-dev-shm-usage',
+    '--disable-features=VizDisplayCompositor',
+    '--headless',
   ];
   
   process.env.AEGIS_TEST_PROXY_URL = process.env.AEGIS_TEST_PROXY_URL || 'https://127.0.0.1:7443';
