@@ -1,8 +1,8 @@
 # Route53 Hosted Zone and DNS Records for Aegis Platform
 
-# Create hosted zone for aegist domain
-resource "aws_route53_zone" "aegist" {
-  name = "aegist.dev"
+# Create hosted zone for aegis domain
+resource "aws_route53_zone" "aegis" {
+  name = "aegis.dev"
 
   comment = "Aegis platform DNS zone for testing"
 
@@ -19,8 +19,8 @@ resource "aws_route53_zone" "aegist" {
 
 # DNS record for platform-api gRPC endpoint
 resource "aws_route53_record" "platform_api_grpc" {
-  zone_id = aws_route53_zone.aegist.zone_id
-  name    = "platform-api-grpc.aegist.dev"
+  zone_id = aws_route53_zone.aegis.zone_id
+  name    = "platform-api-grpc.aegis.dev"
   type    = "CNAME"
   ttl     = 300
 
@@ -32,8 +32,8 @@ resource "aws_route53_record" "platform_api_grpc" {
 
 # DNS record for platform-api HTTP gateway
 resource "aws_route53_record" "platform_api_http" {
-  zone_id = aws_route53_zone.aegist.zone_id
-  name    = "platform-api.aegist.dev"
+  zone_id = aws_route53_zone.aegis.zone_id
+  name    = "platform-api.aegis.dev"
   type    = "CNAME"
   ttl     = 300
 
@@ -42,8 +42,8 @@ resource "aws_route53_record" "platform_api_http" {
 
 # DNS record for proxy
 resource "aws_route53_record" "proxy" {
-  zone_id = aws_route53_zone.aegist.zone_id
-  name    = "proxy.aegist.dev"
+  zone_id = aws_route53_zone.aegis.zone_id
+  name    = "proxy.aegis.dev"
   type    = "CNAME"
   ttl     = 300
 
@@ -52,8 +52,8 @@ resource "aws_route53_record" "proxy" {
 
 # DNS record for Keycloak
 resource "aws_route53_record" "keycloak" {
-  zone_id = aws_route53_zone.aegist.zone_id
-  name    = "keycloak.aegist.dev"
+  zone_id = aws_route53_zone.aegis.zone_id
+  name    = "keycloak.aegis.dev"
   type    = "CNAME"
   ttl     = 300
 
@@ -62,8 +62,8 @@ resource "aws_route53_record" "keycloak" {
 
 # Output nameservers for reference (in case you want to delegate from a parent domain)
 output "route53_nameservers" {
-  description = "Nameservers for the aegist.dev hosted zone"
-  value       = aws_route53_zone.aegist.name_servers
+  description = "Nameservers for the aegis.dev hosted zone"
+  value       = aws_route53_zone.aegis.name_servers
 }
 
 output "platform_api_grpc_hostname" {

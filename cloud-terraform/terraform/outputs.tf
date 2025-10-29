@@ -268,13 +268,13 @@ output "kubectl_config_command" {
 
 # Route53 DNS Information
 output "route53_zone_id" {
-  description = "Route53 hosted zone ID for aegist.dev"
-  value       = aws_route53_zone.aegist.zone_id
+  description = "Route53 hosted zone ID for aegis.dev"
+  value       = aws_route53_zone.aegis.zone_id
 }
 
 output "route53_zone_name" {
   description = "Route53 hosted zone name"
-  value       = aws_route53_zone.aegist.name
+  value       = aws_route53_zone.aegis.name
 }
 
 output "dns_platform_api_grpc" {
