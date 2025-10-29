@@ -50,6 +50,16 @@ resource "aws_route53_record" "proxy" {
   records = [var.proxy_lb_hostname != "" ? var.proxy_lb_hostname : "placeholder.elb.amazonaws.com"]
 }
 
+# DNS record for Keycloak
+resource "aws_route53_record" "keycloak" {
+  zone_id = aws_route53_zone.aegist.zone_id
+  name    = "keycloak.aegist.dev"
+  type    = "CNAME"
+  ttl     = 300
+
+  records = [var.keycloak_lb_hostname != "" ? var.keycloak_lb_hostname : "placeholder.elb.amazonaws.com"]
+}
+
 # Output nameservers for reference (in case you want to delegate from a parent domain)
 output "route53_nameservers" {
   description = "Nameservers for the aegist.dev hosted zone"

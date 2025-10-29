@@ -291,3 +291,8 @@ output "dns_proxy" {
   description = "DNS hostname for proxy service"
   value       = aws_route53_record.proxy.fqdn
 }
+
+output "dns_keycloak" {
+  description = "DNS hostname for Keycloak"
+  value       = aws_route53_record.keycloak.fqdn
+}
