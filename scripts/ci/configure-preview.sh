@@ -100,6 +100,12 @@ log "Waiting for preview LoadBalancers..."
 PLATFORM_LB="$(wait_for_lb "${HELM_RELEASE}-platform-api" "${K8S_NAMESPACE}")"
 PROXY_LB="$(wait_for_lb "${HELM_RELEASE}-proxy" "${K8S_NAMESPACE}")"
 
+# Keycloak may be deployed in a dedicated namespace; try release namespace first, then fallback
+KEYCLOAK_LB="$(wait_for_lb "${HELM_RELEASE}-keycloak" "${K8S_NAMESPACE}")"
+if [[ -z "${KEYCLOAK_LB}" ]]; then
+  KEYCLOAK_LB="$(wait_for_lb "${HELM_RELEASE}-keycloak" "keycloak")"
+fi
+
 if [[ -z "${PLATFORM_LB}" || -z "${PROXY_LB}" ]]; then
   log "Failed to resolve LoadBalancer hostnames"
   exit 1
@@ -107,28 +113,45 @@ fi
 
 log "Updating Route53 records with actual hostnames"
 pushd "${TERRAFORM_DIR}" >/dev/null
-terraform apply -auto-approve \
-  -var="platform_api_lb_hostname=${PLATFORM_LB}" \
-  -var="proxy_lb_hostname=${PROXY_LB}" \
-  -target=aws_route53_record.platform_api_grpc \
-  -target=aws_route53_record.platform_api_http \
-  -target=aws_route53_record.proxy
+apply_cmd=(
+  terraform apply -auto-approve \
+    -var="platform_api_lb_hostname=${PLATFORM_LB}" \
+    -var="proxy_lb_hostname=${PROXY_LB}" \
+    -target=aws_route53_record.platform_api_grpc \
+    -target=aws_route53_record.platform_api_http \
+    -target=aws_route53_record.proxy
+)
+
+if [[ -n "${KEYCLOAK_LB}" ]]; then
+  apply_cmd+=( -var="keycloak_lb_hostname=${KEYCLOAK_LB}" -target=aws_route53_record.keycloak )
+fi
+
+${apply_cmd[@]}
 
 PLATFORM_DNS="$(terraform output -raw dns_platform_api_grpc 2>/dev/null || echo "")"
 PROXY_DNS="$(terraform output -raw dns_proxy 2>/dev/null || echo "")"
+KEYCLOAK_DNS="$(terraform output -raw dns_keycloak 2>/dev/null || echo "")"
 popd >/dev/null
 
 PLATFORM_DNS="${PLATFORM_DNS%.}"
 PROXY_DNS="${PROXY_DNS%.}"
+KEYCLOAK_DNS="${KEYCLOAK_DNS%.}"
 
 if [[ -z "${PLATFORM_DNS}" || -z "${PROXY_DNS}" ]]; then
   log "Terraform did not return DNS records"
   exit 1
 fi
 
+if [[ -n "${KEYCLOAK_LB}" && -z "${KEYCLOAK_DNS}" ]]; then
+  log "Terraform did not return keycloak DNS record"
+fi
+
 log "Route53 updated:"
 log "  ${PLATFORM_DNS} → ${PLATFORM_LB}"
 log "  ${PROXY_DNS} → ${PROXY_LB}"
+if [[ -n "${KEYCLOAK_LB}" && -n "${KEYCLOAK_DNS}" ]]; then
+  log "  ${KEYCLOAK_DNS} → ${KEYCLOAK_LB}"
+fi
 
 TARGET_PROXY_BASE="wss://${PROXY_DNS}:8080"
 log "Ensuring platform-api uses ${TARGET_PROXY_BASE} for proxy tickets"
@@ -150,6 +173,11 @@ fi
 log "Resolving LoadBalancer IPs for local /etc/hosts overrides"
 PLATFORM_IP="$(pick_reachable_ip "${PLATFORM_LB}" 8081)"
 PROXY_IP="$(pick_reachable_ip "${PROXY_LB}" 8080)"
+KEYCLOAK_IP=""
+
+if [[ -n "${KEYCLOAK_LB}" ]]; then
+  KEYCLOAK_IP="$(pick_reachable_ip "${KEYCLOAK_LB}" 443)"
+fi
 
 if [[ -z "${PLATFORM_IP}" ]]; then
   PLATFORM_IP="$(dig +short "${PLATFORM_LB}" | head -1)"
@@ -177,6 +205,12 @@ if [[ -n "${PROXY_IP}" ]]; then
   echo "${PROXY_IP} ${PROXY_DNS}" | sudo tee -a /etc/hosts >/dev/null
 fi
 
+if [[ -n "${KEYCLOAK_IP}" && -n "${KEYCLOAK_DNS}" ]]; then
+  log "  Keycloak IP: ${KEYCLOAK_IP}"
+  sudo sed -i.bak "/${KEYCLOAK_DNS}/d" /etc/hosts 2>/dev/null || true
+  echo "${KEYCLOAK_IP} ${KEYCLOAK_DNS}" | sudo tee -a /etc/hosts >/dev/null
+fi
+
 sudo resolvectl flush-caches >/dev/null 2>&1 || true
 
 GRPC_ADDR="${PLATFORM_DNS}:8081"
@@ -198,5 +232,7 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "platform_ip=${PLATFORM_IP}"
     echo "proxy_dns=${PROXY_DNS}"
     echo "proxy_ip=${PROXY_IP}"
+    echo "keycloak_hostname=${KEYCLOAK_DNS}"
+    echo "keycloak_ip=${KEYCLOAK_IP}"
   } >> "${GITHUB_OUTPUT}"
 fi

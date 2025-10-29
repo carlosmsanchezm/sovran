@@ -41,7 +41,20 @@ Add the proposed API flag for the extension once in `argv.json`:
 
 Ensure your shell profile exports the Aegis CA path, for example:
 
-```bash	export NODE_EXTRA_CA_CERTS="$HOME/aegis-local-trust.pem"
+```bash
+export NODE_EXTRA_CA_CERTS="$HOME/aegis-local-trust.pem"
+```
+
+Provide the Keycloak test credentials (username/password) and TOTP secret so automation can
+complete the MFA challenge:
+
+```bash
+export AEGIS_TEST_USERNAME="cloud@test.com"
+export AEGIS_TEST_PASSWORD="password"
+export AEGIS_TEST_TOTP_SECRET="NUZGUVTLIR2DM4CTMFDVIZTHINGFGT2U" # replace with your user secret
+export AEGIS_AUTH_AUTHORITY="https://keycloak.aegis.dev/realms/aegis"
+export AEGIS_AUTH_CLIENT_ID="vscode-extension"
+export AEGIS_AUTH_REDIRECT_URI="vscode://aegis.aegis-remote/auth"
 ```
 
 ## 4. Launch VS Code
@@ -53,6 +66,11 @@ code /path/to/workspace
 ```
 
 When prompted, sign in via Keycloak. The packaged extension enforces TLS trust using `NODE_EXTRA_CA_CERTS`.
+
+The E2E harness uses Playwright (Chromium) to launch the Keycloak login page, submit the test
+credentials, and generate the time-based one-time password from the configured secret. Make sure the
+test account already has TOTP configured in Keycloak (or uses the same shared secret) so repeat runs
+stay deterministic.
 
 ---
 
