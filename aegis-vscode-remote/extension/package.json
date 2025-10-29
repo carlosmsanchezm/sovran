@@ -21,7 +21,8 @@
     "onCommand:aegis.reconnect",
     "onCommand:aegis.showDiagnostics",
     "onView:aegis.workspaces",
-    "onResolveRemoteAuthority:aegis"
+    "onResolveRemoteAuthority:aegis",
+    "onAuthenticationRequest:aegis"
   ],
   "main": "./out/extension.js",
   "scripts": {
