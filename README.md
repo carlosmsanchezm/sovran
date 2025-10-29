@@ -84,7 +84,7 @@ README.md           # This document
 ## Prerequisites
 
 - VS Code Insiders (client) installed locally.
-- Node.js 20+ and npm for building the extension.
+- Node.js 20+ and npm for building the extension (a VSIX build runs inside a container).
 - `vsce` (`npm install -g @vscode/vsce`) to package the extension.
 - Docker Desktop when building the workspace image.
 - Access to Aegis Platform API and proxy endpoints (normally via `kubectl port-forward`).
@@ -144,6 +144,11 @@ docker push carlosmsanchez/aegis-workspace-mock:latest
 
 Reference the tagged image in your Kubernetes `Deployment`/`StatefulSet` so that every new pod uses
 the correct commit without a manual download.
+
+## Reference
+
+- [Workspace images](docs/workspace-images.md)
+- [VS Code extension packaging and installation](docs/vscode-extension.md)
 
 ## Local Development Workflow
 
