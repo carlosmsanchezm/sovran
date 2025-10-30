@@ -1,0 +1,113 @@
+{
+  "realm": "aegis",
+  "displayName": "Aegis",
+  "enabled": true,
+  "loginWithEmailAllowed": true,
+  "verifyEmail": false,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "sslRequired": "external",
+  "accessTokenLifespan": 300,
+  "accessTokenLifespanForImplicitFlow": 900,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "clients": [
+    {
+      "clientId": "vscode-extension",
+      "name": "VS Code Extension",
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "redirectUris": [
+        "vscode://aegis.aegis-remote/auth"
+      ],
+      "webOrigins": [
+        "vscode://aegis.aegis-remote"
+      ],
+      "defaultClientScopes": [
+        "web-origins",
+        "role_list",
+        "profile",
+        "email",
+        "offline_access"
+      ],
+      "optionalClientScopes": []
+    }
+  ],
+  "defaultDefaultClientScopes": [
+    "role_list",
+    "profile",
+    "email",
+    "web-origins",
+    "offline_access"
+  ],
+  "defaultOptionalClientScopes": [],
+  "clientScopes": [
+    {
+      "name": "offline_access",
+      "description": "OpenID Connect built-in scope: offline_access",
+      "protocol": "openid-connect",
+      "attributes": {
+        "consent.screen.text": "${offlineAccessScopeConsentText}",
+        "display.on.consent.screen": "true"
+      }
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "offline_access",
+        "description": "${role_offline-access}",
+        "composite": false,
+        "clientRole": false,
+        "containerId": "aegis"
+      },
+      {
+        "name": "default-roles-aegis",
+        "description": "Default roles for realm",
+        "composite": true,
+        "clientRole": false,
+        "containerId": "aegis",
+        "composites": {
+          "realm": [
+            "offline_access"
+          ]
+        }
+      }
+    ]
+  },
+  "defaultRole": {
+    "name": "default-roles-aegis",
+    "description": "Default roles for realm",
+    "composite": true,
+    "clientRole": false,
+    "containerId": "aegis"
+  },
+  "requiredActions": [],
+  "users": [
+    {
+      "username": "cloud@test.com",
+      "email": "cloud@test.com",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [],
+      "realmRoles": [
+        "offline_access",
+        "default-roles-aegis"
+      ]
+    }
+  ]
+}

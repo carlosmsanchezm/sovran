@@ -31,6 +31,9 @@ jobs:
       proxy_ip: ${{ steps.configure.outputs.proxy_ip }}
       keycloak_hostname: ${{ steps.configure.outputs.keycloak_hostname }}
       keycloak_ip: ${{ steps.configure.outputs.keycloak_ip }}
+      keycloak_port: ${{ steps.configure.outputs.keycloak_port }}
+      keycloak_scheme: ${{ steps.configure.outputs.keycloak_scheme }}
+      keycloak_authority: ${{ steps.configure.outputs.keycloak_authority }}
     steps:
       - name: Checkout extension repository
         uses: actions/checkout@v4
@@ -181,11 +184,13 @@ jobs:
           K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
           KEYCLOAK_HOSTNAME: ${{ steps.configure.outputs.keycloak_hostname }}
           KEYCLOAK_IP: ${{ steps.configure.outputs.keycloak_ip }}
+          KEYCLOAK_PORT: ${{ steps.configure.outputs.keycloak_port }}
+          KEYCLOAK_SCHEME: ${{ steps.configure.outputs.keycloak_scheme }}
           AEGIS_TEST_USERNAME: ${{ secrets.AEGIS_TEST_USERNAME }}
           AEGIS_TEST_PASSWORD: ${{ secrets.AEGIS_TEST_PASSWORD }}
           AEGIS_TEST_TOTP_SECRET: ${{ secrets.AEGIS_TEST_TOTP_SECRET }}
           AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
-          AEGIS_AUTH_AUTHORITY: ${{ format('https://{0}/realms/aegis', steps.configure.outputs.keycloak_hostname) }}
+          AEGIS_AUTH_AUTHORITY: ${{ steps.configure.outputs.keycloak_authority != '' && steps.configure.outputs.keycloak_authority || format('https://{0}/realms/aegis', steps.configure.outputs.keycloak_hostname) }}
           AEGIS_AUTH_CLIENT_ID: vscode-extension
           AEGIS_AUTH_REDIRECT_URI: vscode://aegis.aegis-remote/auth
         run: |
@@ -194,6 +199,13 @@ jobs:
           CACERT="${GRPC_CA}"
           KEYCLOAK_SERVICE="${HELM_RELEASE}-keycloak"
           KEYCLOAK_NAMESPACE="${K8S_NAMESPACE}"
+          KEYCLOAK_SCHEME_LOCAL="${KEYCLOAK_SCHEME:-https}"
+          TARGET_KEYCLOAK_PORT="${KEYCLOAK_PORT:-443}"
+          if [[ "${KEYCLOAK_SCHEME_LOCAL}" == "http" ]]; then
+            LOCAL_KEYCLOAK_PORT=18080
+          else
+            LOCAL_KEYCLOAK_PORT=18443
+          fi
           if [[ -n "${KEYCLOAK_HOSTNAME}" && -n "${KEYCLOAK_IP}" ]]; then
             sudo sed -i.bak "/${KEYCLOAK_HOSTNAME}/d" /etc/hosts
             echo "${KEYCLOAK_IP} ${KEYCLOAK_HOSTNAME}" | sudo tee -a /etc/hosts >/dev/null
@@ -223,13 +235,18 @@ jobs:
           }
 
           if kubectl -n "${KEYCLOAK_NAMESPACE}" get svc "${KEYCLOAK_SERVICE}" >/dev/null 2>&1; then
-            kubectl -n "${KEYCLOAK_NAMESPACE}" port-forward svc/"${KEYCLOAK_SERVICE}" 18443:8443 >"${RUNNER_TEMP}/keycloak-port-forward.log" 2>&1 &
+            kubectl -n "${KEYCLOAK_NAMESPACE}" port-forward svc/"${KEYCLOAK_SERVICE}" ${LOCAL_KEYCLOAK_PORT}:${TARGET_KEYCLOAK_PORT} >"${RUNNER_TEMP}/keycloak-port-forward.log" 2>&1 &
             PORT_FORWARD_PID=$!
             trap cleanup_port_forward EXIT
             # Give port-forward a moment to establish.
             sleep 5
-            export AEGIS_AUTH_AUTHORITY="https://127.0.0.1:18443/realms/aegis"
-            export AEGIS_AUTH_TLS_SKIP_VERIFY=1
+            if [[ "${KEYCLOAK_SCHEME_LOCAL}" == "http" ]]; then
+              export AEGIS_AUTH_AUTHORITY="http://127.0.0.1:${LOCAL_KEYCLOAK_PORT}/realms/aegis"
+              unset AEGIS_AUTH_TLS_SKIP_VERIFY
+            else
+              export AEGIS_AUTH_AUTHORITY="https://127.0.0.1:${LOCAL_KEYCLOAK_PORT}/realms/aegis"
+              export AEGIS_AUTH_TLS_SKIP_VERIFY=1
+            fi
           else
             echo "Keycloak service ${KEYCLOAK_NAMESPACE}/${KEYCLOAK_SERVICE} not found; using ${AEGIS_AUTH_AUTHORITY}" >&2
           fi
@@ -298,7 +315,7 @@ jobs:
       AEGIS_WORKSPACE_SUBMIT_DELAY_MS: '10000'
       AEGIS_WORKSPACE_APPEAR_TIMEOUT_MS: '240000'
       AEGIS_WORKLOAD_NAMESPACE: aegis-workloads
-      AEGIS_AUTH_AUTHORITY: ${{ format('https://{0}/realms/aegis', needs.deploy-preview.outputs.keycloak_hostname) }}
+      AEGIS_AUTH_AUTHORITY: ${{ needs.deploy-preview.outputs.keycloak_authority != '' && needs.deploy-preview.outputs.keycloak_authority || format('https://{0}/realms/aegis', needs.deploy-preview.outputs.keycloak_hostname) }}
       AEGIS_AUTH_CLIENT_ID: vscode-extension
       AEGIS_AUTH_REDIRECT_URI: vscode://aegis.aegis-remote/auth
       AEGIS_TEST_USERNAME: ${{ secrets.AEGIS_TEST_USERNAME }}

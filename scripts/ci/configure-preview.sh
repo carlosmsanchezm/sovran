@@ -105,6 +105,24 @@ KEYCLOAK_LB="$(wait_for_lb "${HELM_RELEASE}-keycloak" "${K8S_NAMESPACE}")"
 if [[ -z "${KEYCLOAK_LB}" ]]; then
   KEYCLOAK_LB="$(wait_for_lb "${HELM_RELEASE}-keycloak" "keycloak")"
 fi
+KEYCLOAK_PORT=""
+KEYCLOAK_SCHEME="https"
+
+if kubectl get svc "${HELM_RELEASE}-keycloak" -n "${K8S_NAMESPACE}" >/dev/null 2>&1; then
+  KEYCLOAK_PORT="$(kubectl get svc "${HELM_RELEASE}-keycloak" -n "${K8S_NAMESPACE}" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || echo "")"
+elif kubectl get svc "${HELM_RELEASE}-keycloak" -n keycloak >/dev/null 2>&1; then
+  KEYCLOAK_PORT="$(kubectl get svc "${HELM_RELEASE}-keycloak" -n keycloak -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || echo "")"
+fi
+
+if [[ -z "${KEYCLOAK_PORT}" ]]; then
+  KEYCLOAK_PORT="8080"
+fi
+
+if [[ "${KEYCLOAK_PORT}" == "443" ]]; then
+  KEYCLOAK_SCHEME="https"
+else
+  KEYCLOAK_SCHEME="http"
+fi
 
 if [[ -z "${PLATFORM_LB}" || -z "${PROXY_LB}" ]]; then
   log "Failed to resolve LoadBalancer hostnames"
@@ -153,6 +171,17 @@ if [[ -n "${KEYCLOAK_LB}" && -n "${KEYCLOAK_DNS}" ]]; then
   log "  ${KEYCLOAK_DNS} → ${KEYCLOAK_LB}"
 fi
 
+KEYCLOAK_AUTHORITY=""
+if [[ -n "${KEYCLOAK_DNS}" ]]; then
+  KEYCLOAK_AUTHORITY="${KEYCLOAK_SCHEME}://${KEYCLOAK_DNS}"
+  if [[ "${KEYCLOAK_SCHEME}" == "http" && "${KEYCLOAK_PORT}" != "80" ]]; then
+    KEYCLOAK_AUTHORITY+=":${KEYCLOAK_PORT}"
+  elif [[ "${KEYCLOAK_SCHEME}" == "https" && "${KEYCLOAK_PORT}" != "443" && -n "${KEYCLOAK_PORT}" ]]; then
+    KEYCLOAK_AUTHORITY+=":${KEYCLOAK_PORT}"
+  fi
+  KEYCLOAK_AUTHORITY+="/realms/aegis"
+fi
+
 TARGET_PROXY_BASE="wss://${PROXY_DNS}:8080"
 log "Ensuring platform-api uses ${TARGET_PROXY_BASE} for proxy tickets"
 kubectl -n "${K8S_NAMESPACE}" set env deployment/"${HELM_RELEASE}-platform-api" \
@@ -176,7 +205,7 @@ PROXY_IP="$(pick_reachable_ip "${PROXY_LB}" 8080)"
 KEYCLOAK_IP=""
 
 if [[ -n "${KEYCLOAK_LB}" ]]; then
-  KEYCLOAK_IP="$(pick_reachable_ip "${KEYCLOAK_LB}" 443)"
+  KEYCLOAK_IP="$(pick_reachable_ip "${KEYCLOAK_LB}" "${KEYCLOAK_PORT}")"
 fi
 
 if [[ -z "${PLATFORM_IP}" ]]; then
@@ -234,5 +263,8 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "proxy_ip=${PROXY_IP}"
     echo "keycloak_hostname=${KEYCLOAK_DNS}"
     echo "keycloak_ip=${KEYCLOAK_IP}"
+    echo "keycloak_port=${KEYCLOAK_PORT}"
+    echo "keycloak_scheme=${KEYCLOAK_SCHEME}"
+    echo "keycloak_authority=${KEYCLOAK_AUTHORITY}"
   } >> "${GITHUB_OUTPUT}"
 fi
