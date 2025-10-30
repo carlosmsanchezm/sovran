@@ -330,6 +330,25 @@ describe('auth module (OAuth)', () => {
     expect(result).toBe('aegis-user');
   });
 
+  test('createSession surfaces helpful message when token exchange fetch fails', async () => {
+    await auth.initializeAuth(ctx);
+    const provider = (vscode.authentication.registerAuthenticationProvider as jest.Mock).mock
+      .calls[0][2] as any;
+
+    const openExternalMock = vscode.env.openExternal as jest.MockedFunction<typeof vscode.env.openExternal>;
+    openExternalMock.mockImplementation(async () => true);
+
+    fetchMock.mockRejectedValueOnce(new TypeError('self signed certificate'));
+
+    const sessionPromise = provider.createSession(['platform'], {});
+    const state = new URL((openExternalMock.mock.calls[0][0] as any).toString()).searchParams.get('state');
+    await auth.handleAuthUri(
+      vscode.Uri.parse(`vscode://aegis.aegis-remote/auth?code=dummy-code&state=${state}`)
+    );
+
+    await expect(sessionPromise).rejects.toThrow(/Token exchange failed: .*self signed certificate/i);
+  });
+
   test('corrupt persisted payload is discarded', async () => {
     await ctx.secrets.store(SECRET_KEY, '{not-json');
     await auth.initializeAuth(ctx);

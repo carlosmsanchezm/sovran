@@ -3,11 +3,13 @@ import * as fs from 'fs';
 import { promises as fsp } from 'fs';
 import * as path from 'path';
 import crypto from 'crypto';
+import os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { downloadAndUnzipVSCode } from '@vscode/test-electron';
+import { performKeycloakLogin } from '../__tests__/e2e-real/suite/lib/keycloak-login';
 
 const execFileAsync = promisify(execFile);
 
@@ -31,6 +33,8 @@ export interface WorkspaceSessionDetails {
   session_id?: string | null;
   vscode_uri?: string | null;
   expires_at_utc?: string | null;
+  user_email?: string | null;
+  user_token?: string | null;
   metadata: {
     grpc_addr: string;
     queue?: string;
@@ -200,6 +204,271 @@ function parseJson<T>(raw: string | undefined): T | undefined {
     console.warn('[prepare-real-workspace] failed to parse JSON value:', err);
     return undefined;
   }
+}
+
+interface AutomationAuthResult {
+  token: string;
+  email?: string;
+  subject?: string;
+  idToken?: string;
+  refreshToken?: string;
+}
+
+interface DerivedAccountInfo {
+  account: { id: string; label: string };
+  userHeader: string;
+}
+
+let cachedAutomationAuth: Promise<AutomationAuthResult> | undefined;
+
+function toBase64Url(buffer: Buffer): string {
+  return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/u, '');
+}
+
+function createPkcePair(): { verifier: string; challenge: string } {
+  const verifier = toBase64Url(crypto.randomBytes(32));
+  const challenge = toBase64Url(crypto.createHash('sha256').update(verifier).digest());
+  return { verifier, challenge };
+}
+
+function parseJwtClaims(token: string | undefined): Record<string, unknown> | undefined {
+  if (!token) {
+    return undefined;
+  }
+  const parts = token.split('.');
+  if (parts.length < 2) {
+    return undefined;
+  }
+  const payload = parts[1];
+  const padded = payload.padEnd(payload.length + (4 - (payload.length % 4)) % 4, '=');
+  try {
+    const json = Buffer.from(padded.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    return JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function deriveAccountInfo(claims: Record<string, unknown> | undefined, fallbackSubject?: string): DerivedAccountInfo {
+  const subject =
+    (typeof claims?.sub === 'string' && claims.sub) ||
+    (fallbackSubject && fallbackSubject.trim()) ||
+    'aegis-user';
+  const label =
+    (typeof claims?.email === 'string' && claims.email) ||
+    (typeof claims?.preferred_username === 'string' && claims.preferred_username) ||
+    (typeof claims?.name === 'string' && claims.name) ||
+    subject;
+  const userHeader =
+    (typeof claims?.email === 'string' && claims.email) ||
+    (typeof claims?.preferred_username === 'string' && claims.preferred_username) ||
+    subject;
+  return {
+    account: { id: subject, label },
+    userHeader,
+  };
+}
+
+function normalizeScopes(raw: string | undefined): string[] {
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(/[\s,]+/)
+    .map((scope) => scope.trim())
+    .filter((scope) => scope.length > 0);
+}
+
+function buildScope(base: string[], audience?: string, extras: string[] = []): string {
+  const scopeSet = new Set<string>();
+  for (const value of base) {
+    const trimmed = value.trim();
+    if (trimmed) {
+      scopeSet.add(trimmed);
+    }
+  }
+  for (const value of extras) {
+    const trimmed = value.trim();
+    if (trimmed) {
+      scopeSet.add(trimmed);
+    }
+  }
+  if (audience && audience.trim()) {
+    scopeSet.add(audience.trim());
+  }
+  if (scopeSet.size === 0) {
+    return 'openid';
+  }
+  return Array.from(scopeSet).join(' ');
+}
+
+function resolveAuthorityBase(raw: string): string {
+  return raw.replace(/\/+$/u, '');
+}
+
+async function resolveAutomationAuth(env: NodeJS.ProcessEnv, debugLogs: boolean): Promise<AutomationAuthResult> {
+  if (!cachedAutomationAuth) {
+    cachedAutomationAuth = (async () => {
+      const existingToken = env.AEGIS_TEST_TOKEN?.trim();
+      const existingEmail = env.AEGIS_TEST_EMAIL?.trim();
+      if (existingToken) {
+        if (debugLogs) {
+          console.log('[prepare-real-workspace] using AEGIS_TEST_TOKEN from environment');
+        }
+        return { token: existingToken, email: existingEmail };
+      }
+
+      const username = env.AEGIS_TEST_USERNAME?.trim();
+      const password = env.AEGIS_TEST_PASSWORD ?? '';
+      if (!username || !password) {
+        throw new Error(
+          'Provide AEGIS_TEST_TOKEN, or supply AEGIS_TEST_USERNAME and AEGIS_TEST_PASSWORD so the automation can sign in.'
+        );
+      }
+
+      const authority = resolveAuthorityBase(env.AEGIS_AUTH_AUTHORITY?.trim() || 'https://keycloak.localtest.me/realms/aegis');
+      const clientId = env.AEGIS_AUTH_CLIENT_ID?.trim() || 'vscode-extension';
+      const redirectUri = env.AEGIS_AUTH_REDIRECT_URI?.trim() || 'vscode://aegis.aegis-remote/auth';
+      const prompt = env.AEGIS_AUTH_PROMPT?.trim();
+      const loginHint = env.AEGIS_AUTH_LOGIN_HINT?.trim() || username;
+      const audienceParam = env.AEGIS_AUTH_AUDIENCE?.trim();
+      const loginTimeoutMs = parseDurationMs(env.AEGIS_AUTH_LOGIN_TIMEOUT_MS || env.AEGIS_AUTH_LOGIN_TIMEOUT, 120_000);
+      const skipTlsRequested = [env.AEGIS_TLS_SKIP_VERIFY, env.AEGIS_AUTH_TLS_SKIP_VERIFY]
+        .map((value) => (value ?? '').trim().toLowerCase())
+        .some((value) => value === '1' || value === 'true' || value === 'yes');
+
+      if (skipTlsRequested) {
+        throw new Error(
+          'TLS verification is required for real-backend tests. Remove AEGIS_TLS_SKIP_VERIFY / AEGIS_AUTH_TLS_SKIP_VERIFY and ensure the trust bundle is present.'
+        );
+      }
+
+      const baseScopes = normalizeScopes(env.AEGIS_AUTH_SCOPES);
+      if (baseScopes.length === 0) {
+        baseScopes.push('openid', 'profile', 'email', 'offline_access');
+      }
+      const extraScopes = [
+        ...normalizeScopes(env.AEGIS_AUTH_ADDITIONAL_SCOPES),
+        ...normalizeScopes(env.AEGIS_AUTH_REQUESTED_SCOPES),
+        ...normalizeScopes(env.AEGIS_AUTH_EXTRA_SCOPES),
+      ];
+      const audience = env.AEGIS_PLATFORM_AUTH_SCOPE?.trim()
+        || env.AEGIS_AUTH_SCOPE?.trim()
+        || env.AEGIS_PLATFORM_AUTH_AUDIENCE?.trim();
+      const scope = buildScope(baseScopes, audience, extraScopes);
+
+      const { verifier, challenge } = createPkcePair();
+      const state = toBase64Url(crypto.randomBytes(18));
+
+      const authUrl = new URL(`${authority}/protocol/openid-connect/auth`);
+      authUrl.searchParams.set('client_id', clientId);
+      authUrl.searchParams.set('redirect_uri', redirectUri);
+      authUrl.searchParams.set('response_type', 'code');
+      authUrl.searchParams.set('scope', scope);
+      authUrl.searchParams.set('code_challenge', challenge);
+      authUrl.searchParams.set('code_challenge_method', 'S256');
+      authUrl.searchParams.set('state', state);
+      if (prompt) {
+        authUrl.searchParams.set('prompt', prompt);
+      }
+      if (loginHint) {
+        authUrl.searchParams.set('login_hint', loginHint);
+      }
+      if (audienceParam) {
+        authUrl.searchParams.set('audience', audienceParam);
+      }
+
+      if (debugLogs) {
+        console.log('[prepare-real-workspace] acquiring automation token via Keycloak login');
+      }
+
+      const { redirectUri: returnedUri } = await performKeycloakLogin(authUrl.toString(), {
+        username,
+        password,
+        totpSecret: env.AEGIS_TEST_TOTP_SECRET,
+        loginTimeoutMs,
+      });
+
+      if (!returnedUri) {
+        throw new Error('Keycloak login did not yield a redirect URI');
+      }
+      const parsedRedirect = new URL(returnedUri);
+      const returnedState = parsedRedirect.searchParams.get('state') ?? '';
+      if (returnedState && returnedState !== state) {
+        throw new Error('Keycloak login returned an unexpected state value');
+      }
+      const code = parsedRedirect.searchParams.get('code');
+      if (!code) {
+        throw new Error('Authorization redirect missing code parameter');
+      }
+
+      const tokenUrl = `${authority}/protocol/openid-connect/token`;
+      const body = new URLSearchParams();
+      body.set('grant_type', 'authorization_code');
+      body.set('code', code);
+      body.set('redirect_uri', redirectUri);
+      body.set('client_id', clientId);
+      body.set('code_verifier', verifier);
+      if (scope) {
+        body.set('scope', scope);
+      }
+
+      const response = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(
+          `Keycloak token exchange failed (${response.status} ${response.statusText}): ${text.slice(0, 500)}`
+        );
+      }
+
+      type TokenResponse = {
+        access_token?: string;
+        refresh_token?: string;
+        id_token?: string;
+        scope?: string;
+        expires_in?: number | string;
+      };
+
+      const tokenResponse = (await response.json()) as TokenResponse;
+      const accessToken = tokenResponse.access_token?.trim();
+      if (!accessToken) {
+        throw new Error('Keycloak token exchange did not return access_token');
+      }
+      const idToken = tokenResponse.id_token?.trim();
+      const claims = parseJwtClaims(idToken) ?? parseJwtClaims(accessToken);
+      const derived = deriveAccountInfo(claims, username);
+      const resolvedEmail = env.AEGIS_TEST_EMAIL?.trim() || derived.userHeader || username;
+
+      env.AEGIS_TEST_TOKEN = accessToken;
+      if (!env.AEGIS_TEST_EMAIL && resolvedEmail) {
+        env.AEGIS_TEST_EMAIL = resolvedEmail;
+      }
+      if (idToken && !env.AEGIS_TEST_ID_TOKEN) {
+        env.AEGIS_TEST_ID_TOKEN = idToken;
+      }
+
+      if (debugLogs) {
+        console.log('[prepare-real-workspace] obtained automation token via Keycloak login');
+      }
+
+      return {
+        token: accessToken,
+        email: resolvedEmail,
+        subject: derived.account.id,
+        idToken,
+        refreshToken: tokenResponse.refresh_token?.trim(),
+      };
+    })().catch((err) => {
+      cachedAutomationAuth = undefined;
+      throw err;
+    });
+  }
+
+  return cachedAutomationAuth;
 }
 
 function buildWorkspaceId(prefix: string): string {
@@ -685,6 +954,8 @@ class WorkspaceManager {
       ca_file: caFile,
       namespace: this.opts.namespace,
       cluster_id: this.opts.clusterId,
+      user_email: this.opts.email,
+      user_token: this.opts.token,
       session_id: typeof response?.session_id === 'string' ? response.session_id : undefined,
       vscode_uri: typeof response?.vscode_uri === 'string' ? response.vscode_uri : undefined,
       expires_at_utc: typeof response?.expires_at_utc === 'string' ? response.expires_at_utc : undefined,
@@ -816,22 +1087,35 @@ function parseWorkspaceCommand(raw: string | undefined, debugLogs: boolean): str
 async function buildOptions(overrides: Partial<PrepareOptions>, cli: CliOverrides): Promise<PrepareOptions> {
   const env = process.env;
 
-  const grpcAddr = overrides.grpcAddr ?? env.AEGIS_GRPC_ADDR;
+  const debugLogs = overrides.debugLogs ?? env.AEGIS_E2E_DEBUG === '1';
+
+  const grpcAddr = overrides.grpcAddr
+    ?? env.AEGIS_GRPC_ADDR
+    ?? env.AEGIS_PLATFORM_GRPC_ADDR
+    ?? env.AEGIS_PLATFORM_GRPC_ENDPOINT
+    ?? 'platform-api-grpc.localtest.me:443';
   if (!grpcAddr) {
     throw new Error('AEGIS_GRPC_ADDR must be set');
   }
+  env.AEGIS_GRPC_ADDR = grpcAddr;
 
-  const token = overrides.token ?? env.AEGIS_TEST_TOKEN;
+  let token = overrides.token ?? env.AEGIS_TEST_TOKEN?.trim();
+  let resolvedEmail: string | undefined;
+  if (!token) {
+    const automationAuth = await resolveAutomationAuth(env, debugLogs);
+    token = automationAuth.token;
+    resolvedEmail = automationAuth.email;
+  }
   if (!token) {
     throw new Error('AEGIS_TEST_TOKEN must be set');
   }
+  env.AEGIS_TEST_TOKEN = token;
 
-  const projectId = overrides.projectId ?? env.AEGIS_PROJECT_ID;
+  const projectId = overrides.projectId ?? env.AEGIS_PROJECT_ID ?? 'p-demo';
   if (!projectId) {
     throw new Error('AEGIS_PROJECT_ID must be set');
   }
-
-  const debugLogs = overrides.debugLogs ?? env.AEGIS_E2E_DEBUG === '1';
+  env.AEGIS_PROJECT_ID = projectId;
 
   const workspaceEnv: Record<string, string> = {
     ...(parseJson<Record<string, string>>(env.AEGIS_TEST_WORKSPACE_ENV) ?? {}),
@@ -885,12 +1169,35 @@ async function buildOptions(overrides: Partial<PrepareOptions>, cli: CliOverride
     ?? env.AEGIS_WORKSPACE_OUTPUT
     ?? DEFAULT_OUTPUT_PATH;
 
-  const caPath = overrides.caPath ?? env.AEGIS_CA_PEM?.trim();
+  const homeTrustPath = path.resolve(os.homedir(), 'aegis-local-trust.pem');
+  const defaultCaPath = fs.existsSync(homeTrustPath) ? homeTrustPath : undefined;
+
+  const resolvedCaPath = overrides.caPath ?? env.AEGIS_CA_PEM?.trim() ?? defaultCaPath;
   const caInline = overrides.caInline ?? env.AEGIS_CA_PEM_INLINE?.trim();
   const caOutputPath = overrides.caOutputPath ?? DEFAULT_CA_OUTPUT_PATH;
 
-  const skipTls = overrides.skipTls
-    ?? ((env.AEGIS_TLS_SKIP_VERIFY === '1') || (env.AEGIS_TLS_SKIP_VERIFY === 'true'));
+  if (!resolvedCaPath) {
+    throw new Error(
+      `TLS trust bundle not found. Expected ${homeTrustPath}. Run "make deploy-local-tls" in the aegis repo to regenerate certificates.`
+    );
+  }
+  if (!fs.existsSync(resolvedCaPath)) {
+    throw new Error(
+      `TLS trust bundle not found at ${resolvedCaPath}. Run "make deploy-local-tls" in the aegis repo to regenerate certificates.`
+    );
+  }
+
+  const caPath = resolvedCaPath;
+
+  if (!env.AEGIS_CA_PEM) {
+    env.AEGIS_CA_PEM = caPath;
+  }
+
+  if (overrides.skipTls) {
+    throw new Error('Real-backend tests require TLS. Remove skipTls overrides.');
+  }
+
+  const skipTls = false;
 
   const policyRegions = (env.AEGIS_PROJECT_POLICY_REGIONS || 'us-east-1')
     .split(',')
@@ -917,10 +1224,14 @@ async function buildOptions(overrides: Partial<PrepareOptions>, cli: CliOverride
 
   const allowCleanupHook = overrides.allowCleanupHook ?? true;
 
+  if (resolvedEmail && !env.AEGIS_TEST_EMAIL) {
+    env.AEGIS_TEST_EMAIL = resolvedEmail;
+  }
+
   return {
     grpcAddr,
     token,
-    email: overrides.email ?? env.AEGIS_TEST_EMAIL ?? env.AEGIS_WORKSPACE_EMAIL,
+    email: overrides.email ?? env.AEGIS_TEST_EMAIL ?? resolvedEmail ?? env.AEGIS_WORKSPACE_EMAIL,
     namespace: overrides.namespace ?? env.AEGIS_PLATFORM_NAMESPACE ?? 'default',
     projectId,
     projectDisplayName: overrides.projectDisplayName ?? env.AEGIS_PROJECT_DISPLAY_NAME,

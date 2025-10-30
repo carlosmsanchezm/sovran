@@ -19,6 +19,11 @@ interface WorkspaceSessionPayload {
   ca_pem?: string | null;
   ca_file?: string | null;
   namespace?: string | null;
+  user_email?: string | null;
+  metadata?: {
+    grpc_addr?: string | null;
+  };
+  user_token?: string | null;
 }
 
 function runHelperScript(args: string[]): number {
@@ -122,6 +127,12 @@ suite('Aegis REAL backend E2E', function () {
     if (sessionPayload.namespace) {
       process.env.AEGIS_PLATFORM_NAMESPACE = sessionPayload.namespace;
     }
+    if (sessionPayload.user_email) {
+      process.env.AEGIS_TEST_EMAIL = sessionPayload.user_email;
+    }
+    if (sessionPayload.user_token) {
+      process.env.AEGIS_TEST_TOKEN = sessionPayload.user_token;
+    }
 
     if (sessionPayload.ca_file && sessionPayload.ca_file.trim().length > 0) {
       process.env.AEGIS_CA_PEM = sessionPayload.ca_file;
@@ -131,6 +142,9 @@ suite('Aegis REAL backend E2E', function () {
       process.env.AEGIS_CA_PEM = caFromSessionPath;
     } else {
       process.env.AEGIS_CA_PEM = '';
+    }
+    if (sessionPayload.metadata?.grpc_addr) {
+      process.env.AEGIS_GRPC_ADDR = sessionPayload.metadata.grpc_addr;
     }
 
     process.on('exit', () => {
@@ -238,6 +252,33 @@ suite('Aegis REAL backend E2E', function () {
     }
 
     const originalOpenExternal = vscode.env.openExternal;
+    const getSessionDescriptor = Object.getOwnPropertyDescriptor(vscode.authentication, 'getSession');
+    const originalGetSession = (getSessionDescriptor?.value as typeof vscode.authentication.getSession | undefined)?.bind(vscode.authentication);
+    const stubSession: vscode.AuthenticationSession = {
+      id: 'aegis-e2e-session',
+      accessToken: process.env.AEGIS_TEST_TOKEN ?? '',
+      account: {
+        id: process.env.AEGIS_TEST_EMAIL ?? 'aegis-user',
+        label: process.env.AEGIS_TEST_EMAIL ?? 'aegis-user',
+      },
+      scopes: ['platform'],
+    };
+
+    console.log('[real-e2e] overriding authentication.getSession for automation');
+    Object.defineProperty(vscode.authentication, 'getSession', {
+      configurable: true,
+      value: async (...args: Parameters<typeof vscode.authentication.getSession>) => {
+        console.log('[real-e2e] authentication.getSession stub invoked with', args[0], args[1]);
+        if (!stubSession.accessToken) {
+          throw new Error('AEGIS_TEST_TOKEN not set for authentication session stub');
+        }
+        return stubSession;
+      },
+    });
+
+    if (!stubSession.accessToken) {
+      throw new Error('AEGIS_TEST_TOKEN not set for authentication session stub');
+    }
 
     try {
     const extension = vscode.extensions.getExtension('aegis.aegis-remote');
@@ -390,6 +431,12 @@ suite('Aegis REAL backend E2E', function () {
       }
     } finally {
       (vscode.env.openExternal as any) = originalOpenExternal;
+      if (originalGetSession) {
+        Object.defineProperty(vscode.authentication, 'getSession', {
+          configurable: true,
+          value: originalGetSession,
+        });
+      }
     }
   });
 });

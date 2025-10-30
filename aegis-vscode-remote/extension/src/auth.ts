@@ -462,6 +462,20 @@ export async function initializeAuth(context: vscode.ExtensionContext) {
 }
 
 export async function requireSession(createIfNone = true): Promise<vscode.AuthenticationSession | undefined> {
+  const envToken = process.env.AEGIS_TEST_TOKEN?.trim();
+  if (envToken) {
+    const email = process.env.AEGIS_TEST_EMAIL?.trim() || 'aegis-user';
+    sessionMetadata.set(SESSION_ID, { userHeader: email });
+    return {
+      id: SESSION_ID,
+      accessToken: envToken,
+      account: {
+        id: email,
+        label: email,
+      },
+      scopes: ['platform'],
+    };
+  }
   return vscode.authentication.getSession(AUTH_PROVIDER_ID, ['platform'], { createIfNone });
 }
 
