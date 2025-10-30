@@ -179,6 +179,8 @@ jobs:
           CLUSTER_ID: ${{ format('aegis-spoke-{0}', steps.ids.outputs.preview_release) }}
           HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}
           K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
+          KEYCLOAK_HOSTNAME: ${{ steps.configure.outputs.keycloak_hostname }}
+          KEYCLOAK_IP: ${{ steps.configure.outputs.keycloak_ip }}
           AEGIS_TEST_USERNAME: ${{ secrets.AEGIS_TEST_USERNAME }}
           AEGIS_TEST_PASSWORD: ${{ secrets.AEGIS_TEST_PASSWORD }}
           AEGIS_TEST_TOTP_SECRET: ${{ secrets.AEGIS_TEST_TOTP_SECRET }}
@@ -192,8 +194,23 @@ jobs:
           CACERT="${GRPC_CA}"
           KEYCLOAK_SERVICE="${HELM_RELEASE}-keycloak"
           KEYCLOAK_NAMESPACE="${K8S_NAMESPACE}"
+          if [[ -n "${KEYCLOAK_HOSTNAME}" && -n "${KEYCLOAK_IP}" ]]; then
+            sudo sed -i.bak "/${KEYCLOAK_HOSTNAME}/d" /etc/hosts
+            echo "${KEYCLOAK_IP} ${KEYCLOAK_HOSTNAME}" | sudo tee -a /etc/hosts >/dev/null
+          fi
           if ! kubectl -n "${KEYCLOAK_NAMESPACE}" get svc "${KEYCLOAK_SERVICE}" >/dev/null 2>&1; then
             KEYCLOAK_NAMESPACE="keycloak"
+          fi
+
+          if ! kubectl -n "${KEYCLOAK_NAMESPACE}" get svc "${KEYCLOAK_SERVICE}" >/dev/null 2>&1; then
+            DISCOVERED_KEYCLOAK=$(kubectl get svc --all-namespaces -l app.kubernetes.io/name=keycloak -o jsonpath='{range .items[:1]}{.metadata.namespace} {.metadata.name}{end}' 2>/dev/null || true)
+            if [[ -z "${DISCOVERED_KEYCLOAK}" ]]; then
+              DISCOVERED_KEYCLOAK=$(kubectl get svc --all-namespaces -l app=keycloak -o jsonpath='{range .items[:1]}{.metadata.namespace} {.metadata.name}{end}' 2>/dev/null || true)
+            fi
+            if [[ -n "${DISCOVERED_KEYCLOAK}" ]]; then
+              read -r KEYCLOAK_NAMESPACE KEYCLOAK_SERVICE <<<"${DISCOVERED_KEYCLOAK}"
+              echo "Discovered Keycloak service ${KEYCLOAK_NAMESPACE}/${KEYCLOAK_SERVICE}" >&2
+            fi
           fi
 
           PORT_FORWARD_PID=""
@@ -213,6 +230,8 @@ jobs:
             sleep 5
             export AEGIS_AUTH_AUTHORITY="https://127.0.0.1:18443/realms/aegis"
             export AEGIS_AUTH_TLS_SKIP_VERIFY=1
+          else
+            echo "Keycloak service ${KEYCLOAK_NAMESPACE}/${KEYCLOAK_SERVICE} not found; using ${AEGIS_AUTH_AUTHORITY}" >&2
           fi
 
           TOKEN_PAYLOAD=$(npx ts-node aegis-vscode-remote/extension/scripts/prepare-real-workspace.ts --mode token)
