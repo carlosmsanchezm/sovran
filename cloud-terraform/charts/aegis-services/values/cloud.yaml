@@ -36,9 +36,9 @@ platformApi:
     LOG_LEVEL: "info"
     ENVIRONMENT: "production"
     AEGIS_STORE_BACKEND: "postgres"
-    AEGIS_PROXY_BASE_URL: "wss://proxy.aegist.dev:8080"
+    AEGIS_PROXY_BASE_URL: "wss://proxy.aegis.dev:8080"
     # AEGIS_PROXY_BASE_URL is automatically set to the proxy service if proxy.enabled=true
-    # For external proxy, set this to the public URL (e.g., "https://proxy.aegist.dev")
+    # For external proxy, set this to the public URL (e.g., "https://proxy.aegis.dev")
     AEGIS_PROXY_EXPECTED_AUDIENCE: "aegis-proxy"
     DB_HOST: "aegis-prod-rds.cluster-xxxx.us-east-1.rds.amazonaws.com"
     DB_PORT: "5432"
@@ -165,7 +165,7 @@ proxy:
   expectedAudience: "aegis-proxy"
   allowedSuffix: ".svc.cluster.local"
   cluster: "aws-us-east-1-prod"  # Must match the cluster ID in platformApi.clusters
-  publicHost: "proxy.aegist.dev"
+  publicHost: "proxy.aegis.dev"
 
   # Production secrets (configure externally)
   # envFromSecret:

@@ -46,17 +46,17 @@ cd terraform
 **VSCode Extension Settings**:
 ```json
 {
-  "aegisRemote.platform.grpcEndpoint": "platform-api-grpc.aegist.dev:8081",
+  "aegisRemote.platform.grpcEndpoint": "platform-api-grpc.aegis.dev:8081",
   "aegisRemote.security.caPath": "/Users/YOUR_USERNAME/aegis-platform-api-ca.crt",
   "aegisRemote.security.rejectUnauthorized": true
 }
 ```
 
 **What happens**:
-1. Generates TLS certificates with SANs: `platform-api-grpc.aegist.dev`, `proxy.aegist.dev`
+1. Generates TLS certificates with SANs: `platform-api-grpc.aegis.dev`, `proxy.aegis.dev`
 2. Updates `/etc/hosts` with LoadBalancer IPs
 3. Deploys with `values-cloud.yaml` + `values-cloud-tls.yaml`
-4. Sets `AEGIS_PROXY_BASE_URL=wss://proxy.aegist.dev:8080`
+4. Sets `AEGIS_PROXY_BASE_URL=wss://proxy.aegis.dev:8080`
 5. Uses proxy image tag `no-client-cert` (server-side TLS only, no mTLS)
 
 ---
@@ -105,7 +105,7 @@ cd terraform
 - `AEGIS_PROXY_BASE_URL` - Must match deployment mode:
   - Local: `ws://aegis-proxy.aegis-system.svc.cluster.local:8080`
   - Cloud no-TLS: `ws://${PROXY_LB}:8080`
-  - Cloud TLS: `wss://proxy.aegist.dev:8080`
+  - Cloud TLS: `wss://proxy.aegis.dev:8080`
 
 ---
 
@@ -153,20 +153,20 @@ This will:
 - **Fix**: Ensure proxy uses `no-client-cert` image tag
 - **Verify**: `kubectl get deployment aegis-proxy -n aegis-system -o jsonpath='{.spec.template.spec.containers[0].image}'`
 
-### "Name resolution failed for target dns:platform-api-grpc.aegist.dev"
+### "Name resolution failed for target dns:platform-api-grpc.aegis.dev"
 - **Cause**: DNS not resolving locally
-- **Fix**: Check `/etc/hosts` has entry for `platform-api-grpc.aegist.dev`
-- **Verify**: `ping platform-api-grpc.aegist.dev`
+- **Fix**: Check `/etc/hosts` has entry for `platform-api-grpc.aegis.dev`
+- **Verify**: `ping platform-api-grpc.aegis.dev`
 
 ### "Hostname/IP does not match certificate's altnames"
 - **Cause**: Certificate doesn't include the hostname you're connecting to
-- **Fix**: Use hostname in certificate SANs (`platform-api-grpc.aegist.dev` or `proxy.aegist.dev`)
+- **Fix**: Use hostname in certificate SANs (`platform-api-grpc.aegis.dev` or `proxy.aegis.dev`)
 - **Verify**: `openssl x509 -in ~/aegis-platform-api-ca.crt -text -noout | grep DNS:`
 
 ### WorkloadConnection fails but platform-api works
 - **Cause**: Proxy URL is wrong or proxy is unreachable
 - **Fix 1**: Verify `AEGIS_PROXY_BASE_URL` in platform-api deployment
-- **Fix 2**: Add proxy IP to /etc/hosts for `proxy.aegist.dev`
+- **Fix 2**: Add proxy IP to /etc/hosts for `proxy.aegis.dev`
 - **Verify**: `kubectl get deployment aegis-platform-api -n aegis-system -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="AEGIS_PROXY_BASE_URL")].value}'`
 
 ---

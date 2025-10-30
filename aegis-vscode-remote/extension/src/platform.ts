@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { promises as fs } from 'fs';
 import { getSettings, AegisSettings } from './config';
-import { requireSession } from './auth';
+import { getSessionUser, requireSession } from './auth';
 import { out } from './ui';
 
 interface WorkspaceMessage {
@@ -211,6 +211,11 @@ class PlatformClient {
     return new Promise<WorkspaceSummary[]>((resolve, reject) => {
       this.client!.ListWorkloads({ project_id: projectId }, metadata, (err, response) => {
         if (err) {
+          if ((err as grpc.ServiceError)?.code === grpc.status.NOT_FOUND) {
+            out.appendLine(`[platform] project ${projectId} not found; treating as empty workspace list`);
+            resolve([]);
+            return;
+          }
           reject(err);
           return;
         }
@@ -280,7 +285,7 @@ class PlatformClient {
   private buildMetadata(session: vscode.AuthenticationSession): grpc.Metadata {
     const metadata = new grpc.Metadata();
     metadata.add('authorization', `Bearer ${session.accessToken}`);
-    const subject = session.account?.label || session.account?.id;
+    const subject = getSessionUser(session) || session.account?.label || session.account?.id;
     if (subject) {
       metadata.add('x-aegis-user', subject);
     }

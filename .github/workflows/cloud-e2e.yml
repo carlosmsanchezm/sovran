@@ -29,6 +29,8 @@ jobs:
       grpc_ca: ${{ steps.configure.outputs.grpc_ca }}
       platform_ip: ${{ steps.configure.outputs.platform_ip }}
       proxy_ip: ${{ steps.configure.outputs.proxy_ip }}
+      keycloak_hostname: ${{ steps.configure.outputs.keycloak_hostname }}
+      keycloak_ip: ${{ steps.configure.outputs.keycloak_ip }}
     steps:
       - name: Checkout extension repository
         uses: actions/checkout@v4
@@ -228,6 +230,12 @@ jobs:
       AEGIS_WORKSPACE_SUBMIT_DELAY_MS: '10000'
       AEGIS_WORKSPACE_APPEAR_TIMEOUT_MS: '240000'
       AEGIS_WORKLOAD_NAMESPACE: aegis-workloads
+      AEGIS_AUTH_AUTHORITY: ${{ format('https://{0}/realms/aegis', needs.deploy-preview.outputs.keycloak_hostname) }}
+      AEGIS_AUTH_CLIENT_ID: vscode-extension
+      AEGIS_AUTH_REDIRECT_URI: vscode://aegis.aegis-remote/auth
+      AEGIS_TEST_USERNAME: ${{ secrets.AEGIS_TEST_USERNAME }}
+      AEGIS_TEST_PASSWORD: ${{ secrets.AEGIS_TEST_PASSWORD }}
+      AEGIS_TEST_TOTP_SECRET: ${{ secrets.AEGIS_TEST_TOTP_SECRET }}
     steps:
       - name: Skip if deploy failed
         if: ${{ needs.deploy-preview.result != 'success' }}
@@ -252,13 +260,17 @@ jobs:
           path: .tls
         if: ${{ needs.deploy-preview.result == 'success' }}
 
-      - name: Add hosts entries for platform/proxy
+      - name: Add hosts entries for platform/proxy/keycloak
         run: |
           sudo sed -i.bak "/${{ needs.deploy-preview.outputs.grpc_host }}/d" /etc/hosts
           echo "${{ needs.deploy-preview.outputs.platform_ip }} ${{ needs.deploy-preview.outputs.grpc_host }}" | sudo tee -a /etc/hosts
           if [[ -n "${{ needs.deploy-preview.outputs.proxy_hostname }}" && -n "${{ needs.deploy-preview.outputs.proxy_ip }}" ]]; then
             sudo sed -i.bak "/${{ needs.deploy-preview.outputs.proxy_hostname }}/d" /etc/hosts
             echo "${{ needs.deploy-preview.outputs.proxy_ip }} ${{ needs.deploy-preview.outputs.proxy_hostname }}" | sudo tee -a /etc/hosts
+          fi
+          if [[ -n "${{ needs.deploy-preview.outputs.keycloak_hostname }}" && -n "${{ needs.deploy-preview.outputs.keycloak_ip }}" ]]; then
+            sudo sed -i.bak "/${{ needs.deploy-preview.outputs.keycloak_hostname }}/d" /etc/hosts
+            echo "${{ needs.deploy-preview.outputs.keycloak_ip }} ${{ needs.deploy-preview.outputs.keycloak_hostname }}" | sudo tee -a /etc/hosts
           fi
         if: ${{ needs.deploy-preview.result == 'success' }}
 
@@ -314,6 +326,10 @@ jobs:
       - name: Install dependencies
         working-directory: aegis-vscode-remote/extension
         run: npm ci
+        if: ${{ needs.deploy-preview.result == 'success' }}
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
         if: ${{ needs.deploy-preview.result == 'success' }}
 
       - name: Install Xvfb

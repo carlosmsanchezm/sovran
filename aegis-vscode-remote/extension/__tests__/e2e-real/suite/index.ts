@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { spawnSync, execFile } from 'child_process';
 import { promisify } from 'util';
 import * as vscode from 'vscode';
+import { performKeycloakLogin } from './lib/keycloak-login';
 
 const extensionRoot = path.resolve(__dirname, '../../../');
 const defaultSessionPath = path.resolve(extensionRoot, '__tests__/e2e-real/.workspace-session.json');
@@ -18,6 +19,11 @@ interface WorkspaceSessionPayload {
   ca_pem?: string | null;
   ca_file?: string | null;
   namespace?: string | null;
+  user_email?: string | null;
+  metadata?: {
+    grpc_addr?: string | null;
+  };
+  user_token?: string | null;
 }
 
 function runHelperScript(args: string[]): number {
@@ -121,6 +127,12 @@ suite('Aegis REAL backend E2E', function () {
     if (sessionPayload.namespace) {
       process.env.AEGIS_PLATFORM_NAMESPACE = sessionPayload.namespace;
     }
+    if (sessionPayload.user_email) {
+      process.env.AEGIS_TEST_EMAIL = sessionPayload.user_email;
+    }
+    if (sessionPayload.user_token) {
+      process.env.AEGIS_TEST_TOKEN = sessionPayload.user_token;
+    }
 
     if (sessionPayload.ca_file && sessionPayload.ca_file.trim().length > 0) {
       process.env.AEGIS_CA_PEM = sessionPayload.ca_file;
@@ -130,6 +142,9 @@ suite('Aegis REAL backend E2E', function () {
       process.env.AEGIS_CA_PEM = caFromSessionPath;
     } else {
       process.env.AEGIS_CA_PEM = '';
+    }
+    if (sessionPayload.metadata?.grpc_addr) {
+      process.env.AEGIS_GRPC_ADDR = sessionPayload.metadata.grpc_addr;
     }
 
     process.on('exit', () => {
@@ -197,15 +212,17 @@ suite('Aegis REAL backend E2E', function () {
 
   test('sign-in → ticket → heartbeat over real proxy', async () => {
     const email = process.env.AEGIS_TEST_EMAIL ?? '';
-    const token = process.env.AEGIS_TEST_TOKEN ?? '';
     const grpcAddr = process.env.AEGIS_GRPC_ADDR ?? '';
     const namespace = process.env.AEGIS_PLATFORM_NAMESPACE ?? 'default';
     const projectId = process.env.AEGIS_PROJECT_ID ?? '';
     const workspaceId = process.env.AEGIS_WORKSPACE_ID ?? '';
     const caPath = process.env.AEGIS_CA_PEM ?? '';
+    const username = process.env.AEGIS_TEST_USERNAME ?? '';
+    const password = process.env.AEGIS_TEST_PASSWORD ?? '';
 
     assert.ok(email, 'AEGIS_TEST_EMAIL not set');
-    assert.ok(token, 'AEGIS_TEST_TOKEN not set');
+    assert.ok(username, 'AEGIS_TEST_USERNAME not set');
+    assert.ok(password, 'AEGIS_TEST_PASSWORD not set');
     assert.ok(grpcAddr, 'AEGIS_GRPC_ADDR not set');
     assert.ok(workspaceId, 'AEGIS_WORKSPACE_ID not set');
 
@@ -215,6 +232,13 @@ suite('Aegis REAL backend E2E', function () {
     if (projectId) {
       await cfg.update('platform.projectId', projectId, true);
     }
+    const authority = process.env.AEGIS_AUTH_AUTHORITY ?? 'https://keycloak.localtest.me/realms/aegis';
+    const clientId = process.env.AEGIS_AUTH_CLIENT_ID ?? 'vscode-extension';
+    const redirectUri = process.env.AEGIS_AUTH_REDIRECT_URI ?? 'vscode://aegis.aegis-remote/auth';
+
+    await cfg.update('auth.authority', authority, true);
+    await cfg.update('auth.clientId', clientId, true);
+    await cfg.update('auth.redirectUri', redirectUri, true);
     await cfg.update('defaultWorkspaceId', workspaceId, true);
     await cfg.update('heartbeatIntervalMs', 500, true);
     await cfg.update('idleTimeoutMs', 10_000, true);
@@ -227,31 +251,70 @@ suite('Aegis REAL backend E2E', function () {
       await cfg.update('security.rejectUnauthorized', false, true);
     }
 
-    const originalShowInput = vscode.window.showInputBox;
-    (vscode.window.showInputBox as any) = async (opts?: vscode.InputBoxOptions) => {
-      const prompt = opts?.prompt?.toLowerCase() ?? '';
-      if (prompt.includes('email') || prompt.includes('username')) {
-        return email;
-      }
-      return token;
+    const originalOpenExternal = vscode.env.openExternal;
+    const getSessionDescriptor = Object.getOwnPropertyDescriptor(vscode.authentication, 'getSession');
+    const originalGetSession = (getSessionDescriptor?.value as typeof vscode.authentication.getSession | undefined)?.bind(vscode.authentication);
+    const stubSession: vscode.AuthenticationSession = {
+      id: 'aegis-e2e-session',
+      accessToken: process.env.AEGIS_TEST_TOKEN ?? '',
+      account: {
+        id: process.env.AEGIS_TEST_EMAIL ?? 'aegis-user',
+        label: process.env.AEGIS_TEST_EMAIL ?? 'aegis-user',
+      },
+      scopes: ['platform'],
     };
 
+    console.log('[real-e2e] overriding authentication.getSession for automation');
+    Object.defineProperty(vscode.authentication, 'getSession', {
+      configurable: true,
+      value: async (...args: Parameters<typeof vscode.authentication.getSession>) => {
+        console.log('[real-e2e] authentication.getSession stub invoked with', args[0], args[1]);
+        if (!stubSession.accessToken) {
+          throw new Error('AEGIS_TEST_TOKEN not set for authentication session stub');
+        }
+        return stubSession;
+      },
+    });
+
+    if (!stubSession.accessToken) {
+      throw new Error('AEGIS_TEST_TOKEN not set for authentication session stub');
+    }
+
     try {
-      const extension = vscode.extensions.getExtension('aegis.aegis-remote');
-      assert.ok(extension, 'extension not found');
-      if (!extension!.isActive) {
-        await extension!.activate();
+    const extension = vscode.extensions.getExtension('aegis.aegis-remote');
+    assert.ok(extension, 'extension not found');
+    if (!extension!.isActive) {
+      await extension!.activate();
+    }
+
+    const outDir = path.resolve(__dirname, '../../../out');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const platform = require(path.join(outDir, 'platform.js'));
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const connectionModule = require(path.join(outDir, 'connection.js'));
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const authModule = require(path.join(outDir, 'auth.js'));
+
+    (vscode.env.openExternal as any) = async (uri: vscode.Uri) => {
+      const url = uri.toString();
+      if (uri.scheme === 'https' && url.includes('keycloak')) {
+        const username = process.env.AEGIS_TEST_USERNAME ?? '';
+        const password = process.env.AEGIS_TEST_PASSWORD ?? '';
+        if (!username || !password) {
+          throw new Error('AEGIS_TEST_USERNAME and AEGIS_TEST_PASSWORD must be set for Keycloak login');
+        }
+        const loginResult = await performKeycloakLogin(url, {
+          username,
+          password,
+          totpSecret: process.env.AEGIS_TEST_TOTP_SECRET,
+        });
+        await authModule.handleAuthUri(vscode.Uri.parse(loginResult.redirectUri));
+        return true;
       }
+      return originalOpenExternal.call(vscode.env, uri);
+    };
 
-      const outDir = path.resolve(__dirname, '../../../out');
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const platform = require(path.join(outDir, 'platform.js'));
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const connectionModule = require(path.join(outDir, 'connection.js'));
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const authModule = require(path.join(outDir, 'auth.js'));
-
-      await authModule.requireSession(true);
+    await authModule.requireSession(true);
       const availableWorkspaces = await platform.listWorkspaces();
       assert.ok(Array.isArray(availableWorkspaces), 'listWorkspaces did not return an array');
       const listedWorkspace = availableWorkspaces.find((ws: { id?: string }) => ws?.id === workspaceId);
@@ -367,7 +430,13 @@ suite('Aegis REAL backend E2E', function () {
         throw new Error(String(lastError));
       }
     } finally {
-      (vscode.window.showInputBox as any) = originalShowInput;
+      (vscode.env.openExternal as any) = originalOpenExternal;
+      if (originalGetSession) {
+        Object.defineProperty(vscode.authentication, 'getSession', {
+          configurable: true,
+          value: originalGetSession,
+        });
+      }
     }
   });
 });

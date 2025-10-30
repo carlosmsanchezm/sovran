@@ -445,9 +445,9 @@ echo ""
 echo "4️⃣  Generating TLS certificates using Route53 DNS names..."
 
 # Get DNS hostnames from Terraform outputs
-DNS_PLATFORM_API_GRPC=$(terraform output -raw dns_platform_api_grpc 2>/dev/null || echo "platform-api-grpc.aegist.dev")
-DNS_PLATFORM_API_HTTP=$(terraform output -raw dns_platform_api_http 2>/dev/null || echo "platform-api.aegist.dev")
-DNS_PROXY=$(terraform output -raw dns_proxy 2>/dev/null || echo "proxy.aegist.dev")
+DNS_PLATFORM_API_GRPC=$(terraform output -raw dns_platform_api_grpc 2>/dev/null || echo "platform-api-grpc.aegis.dev")
+DNS_PLATFORM_API_HTTP=$(terraform output -raw dns_platform_api_http 2>/dev/null || echo "platform-api.aegis.dev")
+DNS_PROXY=$(terraform output -raw dns_proxy 2>/dev/null || echo "proxy.aegis.dev")
 
 echo "   📋 DNS hostnames:"
 echo "      Platform API gRPC: ${DNS_PLATFORM_API_GRPC}"
@@ -666,9 +666,9 @@ elif [ -n "${PLATFORM_API_LB}" ] && [ -n "${PROXY_LB}" ]; then
     || echo "   ⚠️  Route53 update failed; update manually"
 
   echo "   📋 DNS Records:"
-  echo "      platform-api-grpc.aegist.dev → ${PLATFORM_API_LB}"
-  echo "      platform-api.aegist.dev      → ${PLATFORM_API_LB}"
-  echo "      proxy.aegist.dev             → ${PROXY_LB}"
+  echo "      platform-api-grpc.aegis.dev → ${PLATFORM_API_LB}"
+  echo "      platform-api.aegis.dev      → ${PLATFORM_API_LB}"
+  echo "      proxy.aegis.dev             → ${PROXY_LB}"
 
   # Update /etc/hosts for local DNS resolution
   echo ""
@@ -681,16 +681,16 @@ elif [ -n "${PLATFORM_API_LB}" ] && [ -n "${PROXY_LB}" ]; then
   PROXY_IP=$(echo "${PROXY_IPS}" | awk '{print $1}')
 
   if [ -n "${PLATFORM_API_IP}" ] && [ -n "${PROXY_IP}" ]; then
-    # Remove old aegist.dev entries
-    sudo sed -i.bak '/aegist\.dev/d' /etc/hosts 2>/dev/null || true
+    # Remove old aegis.dev entries
+    sudo sed -i.bak '/aegis\.dev/d' /etc/hosts 2>/dev/null || true
 
     # Add new entries (using first IP from NLB)
-    echo "${PLATFORM_API_IP} platform-api-grpc.aegist.dev platform-api.aegist.dev" | sudo tee -a /etc/hosts >/dev/null
-    echo "${PROXY_IP} proxy.aegist.dev" | sudo tee -a /etc/hosts >/dev/null
+    echo "${PLATFORM_API_IP} platform-api-grpc.aegis.dev platform-api.aegis.dev" | sudo tee -a /etc/hosts >/dev/null
+    echo "${PROXY_IP} proxy.aegis.dev" | sudo tee -a /etc/hosts >/dev/null
 
     echo "   ✅ /etc/hosts updated:"
-    echo "      ${PLATFORM_API_IP} → platform-api-grpc.aegist.dev, platform-api.aegist.dev"
-    echo "      ${PROXY_IP} → proxy.aegist.dev"
+    echo "      ${PLATFORM_API_IP} → platform-api-grpc.aegis.dev, platform-api.aegis.dev"
+    echo "      ${PROXY_IP} → proxy.aegis.dev"
     echo "   📝 Note: NLB IPs (all): platform-api=${PLATFORM_API_IPS}, proxy=${PROXY_IPS}"
   else
     echo "   ⚠️  Could not resolve LoadBalancer IPs; /etc/hosts not updated"

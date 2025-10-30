@@ -21,7 +21,8 @@
     "onCommand:aegis.reconnect",
     "onCommand:aegis.showDiagnostics",
     "onView:aegis.workspaces",
-    "onResolveRemoteAuthority:aegis"
+    "onResolveRemoteAuthority:aegis",
+    "onAuthenticationRequest:aegis"
   ],
   "main": "./out/extension.js",
   "scripts": {
@@ -107,6 +108,39 @@
           "default": "",
           "description": "Project identifier whose interactive workspaces should be listed."
         },
+        "aegisRemote.auth.authority": {
+          "type": "string",
+          "default": "",
+          "description": "OIDC issuer / realm base URL (e.g. https://keycloak.localtest.me/realms/aegis)."
+        },
+        "aegisRemote.auth.clientId": {
+          "type": "string",
+          "default": "",
+          "description": "Public OAuth client identifier registered for the VS Code extension."
+        },
+        "aegisRemote.auth.redirectUri": {
+          "type": "string",
+          "default": "vscode://aegis.aegis-remote/auth",
+          "description": "Redirect URI configured for the Keycloak client (must match exactly)."
+        },
+        "aegisRemote.auth.scopes": {
+          "type": "array",
+          "default": [
+            "openid",
+            "profile",
+            "email",
+            "offline_access"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional OAuth scopes requested during sign-in."
+        },
+        "aegisRemote.auth.prompt": {
+          "type": "string",
+          "default": "",
+          "description": "Optional prompt parameter sent during authorization requests (e.g. \"login\" or \"consent\")."
+        },
         "aegisRemote.defaultWorkspaceId": {
           "type": "string",
           "default": "",
@@ -162,30 +196,32 @@
     "ws": "^8.17.0"
   },
   "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/jest": "^29.5.12",
+    "@types/mocha": "^10.0.6",
     "@types/node": "^20.11.30",
+    "@types/rewire": "^2.5.28",
     "@types/vscode": "^1.99.0",
     "@types/ws": "^8.5.10",
-    "typescript": "^5.4.0",
-    "@vscode/vsce": "^2.24.0",
     "@vscode/dts": "^0.4.0",
-    "@types/jest": "^29.5.12",
-    "jest": "^29.7.0",
-    "ts-jest": "^29.2.5",
-    "jest-environment-node": "^29.7.0",
-    "rewire": "^6.0.0",
-    "@types/glob": "^8.1.0",
     "@vscode/test-electron": "^2.3.9",
-    "mocha": "^10.7.3",
-    "@types/mocha": "^10.0.6",
-    "http-proxy": "^1.18.1",
+    "@vscode/vsce": "^2.24.0",
     "execa": "^9.3.0",
-    "portfinder": "^1.0.32",
     "get-port": "^7.1.0",
+    "http-proxy": "^1.18.1",
+    "jest": "^29.7.0",
+    "jest-environment-node": "^29.7.0",
+    "jest-junit": "^16.0.0",
+    "mocha": "^10.7.3",
+    "mocha-junit-reporter": "^2.2.0",
+    "otplib": "^12.0.1",
+    "playwright": "^1.56.1",
+    "portfinder": "^1.0.32",
+    "rewire": "^6.0.0",
     "rimraf": "^6.0.1",
     "tmp": "^0.2.3",
-    "jest-junit": "^16.0.0",
-    "mocha-junit-reporter": "^2.2.0",
-    "@types/rewire": "^2.5.28",
-    "ts-node": "^10.9.2"
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.0"
   }
 }
