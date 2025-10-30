@@ -37,7 +37,9 @@ jobs:
       AEGIS_PROJECT_ID: ${{ inputs.project_id }}
       AEGIS_WORKSPACE_ID: ${{ inputs.workspace_id }}
       AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
-      AEGIS_TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
+      AEGIS_TEST_USERNAME: ${{ secrets.AEGIS_TEST_USERNAME }}
+      AEGIS_TEST_PASSWORD: ${{ secrets.AEGIS_TEST_PASSWORD }}
+      AEGIS_TEST_TOTP_SECRET: ${{ secrets.AEGIS_TEST_TOTP_SECRET }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

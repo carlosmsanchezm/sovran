@@ -104,7 +104,7 @@ interface CliOverrides {
   readyTimeoutMs?: number;
   pollIntervalMs?: number;
   workspacePrefix?: string;
-  mode?: 'prepare' | 'cleanup' | 'list';
+  mode?: 'prepare' | 'cleanup' | 'list' | 'token';
   sessionFile?: string;
 }
 
@@ -153,7 +153,7 @@ function parseArgs(argv: string[]): CliOverrides {
         overrides.sessionFile = nextValue;
         break;
       case '--mode':
-        if (nextValue === 'cleanup' || nextValue === 'list') {
+        if (nextValue === 'cleanup' || nextValue === 'list' || nextValue === 'token') {
           overrides.mode = nextValue as CliOverrides['mode'];
         } else {
           overrides.mode = 'prepare';
@@ -309,20 +309,11 @@ function resolveAuthorityBase(raw: string): string {
 async function resolveAutomationAuth(env: NodeJS.ProcessEnv, debugLogs: boolean): Promise<AutomationAuthResult> {
   if (!cachedAutomationAuth) {
     cachedAutomationAuth = (async () => {
-      const existingToken = env.AEGIS_TEST_TOKEN?.trim();
-      const existingEmail = env.AEGIS_TEST_EMAIL?.trim();
-      if (existingToken) {
-        if (debugLogs) {
-          console.log('[prepare-real-workspace] using AEGIS_TEST_TOKEN from environment');
-        }
-        return { token: existingToken, email: existingEmail };
-      }
-
       const username = env.AEGIS_TEST_USERNAME?.trim();
       const password = env.AEGIS_TEST_PASSWORD ?? '';
       if (!username || !password) {
         throw new Error(
-          'Provide AEGIS_TEST_TOKEN, or supply AEGIS_TEST_USERNAME and AEGIS_TEST_PASSWORD so the automation can sign in.'
+          'Provide AEGIS_TEST_USERNAME and AEGIS_TEST_PASSWORD so the automation can sign in.'
         );
       }
 
@@ -442,14 +433,6 @@ async function resolveAutomationAuth(env: NodeJS.ProcessEnv, debugLogs: boolean)
       const claims = parseJwtClaims(idToken) ?? parseJwtClaims(accessToken);
       const derived = deriveAccountInfo(claims, username);
       const resolvedEmail = env.AEGIS_TEST_EMAIL?.trim() || derived.userHeader || username;
-
-      env.AEGIS_TEST_TOKEN = accessToken;
-      if (!env.AEGIS_TEST_EMAIL && resolvedEmail) {
-        env.AEGIS_TEST_EMAIL = resolvedEmail;
-      }
-      if (idToken && !env.AEGIS_TEST_ID_TOKEN) {
-        env.AEGIS_TEST_ID_TOKEN = idToken;
-      }
 
       if (debugLogs) {
         console.log('[prepare-real-workspace] obtained automation token via Keycloak login');
@@ -617,9 +600,6 @@ async function loadPlatformClient(opts: PrepareOptions): Promise<PlatformClient>
 function buildMetadata(opts: PrepareOptions): grpc.Metadata {
   const metadata = new grpc.Metadata();
   metadata.add('authorization', `Bearer ${opts.token}`);
-  if (opts.email) {
-    metadata.add('x-aegis-user', opts.email);
-  }
   if (opts.namespace) {
     metadata.add('x-aegis-namespace', opts.namespace);
   }
@@ -1099,7 +1079,7 @@ async function buildOptions(overrides: Partial<PrepareOptions>, cli: CliOverride
   }
   env.AEGIS_GRPC_ADDR = grpcAddr;
 
-  let token = overrides.token ?? env.AEGIS_TEST_TOKEN?.trim();
+  let token = overrides.token;
   let resolvedEmail: string | undefined;
   if (!token) {
     const automationAuth = await resolveAutomationAuth(env, debugLogs);
@@ -1107,9 +1087,8 @@ async function buildOptions(overrides: Partial<PrepareOptions>, cli: CliOverride
     resolvedEmail = automationAuth.email;
   }
   if (!token) {
-    throw new Error('AEGIS_TEST_TOKEN must be set');
+    throw new Error('Failed to acquire automation access token for Platform API calls.');
   }
-  env.AEGIS_TEST_TOKEN = token;
 
   const projectId = overrides.projectId ?? env.AEGIS_PROJECT_ID ?? 'p-demo';
   if (!projectId) {
@@ -1344,6 +1323,20 @@ async function main(): Promise<void> {
     const session = await loadWorkspaceSession(cli.sessionFile);
     await cleanupWorkspace(session, {});
     console.log('[prepare-real-workspace] cleaned workspace', session.workspace_id);
+    return;
+  }
+
+  if (mode === 'token') {
+    const debugLogs = process.env.AEGIS_E2E_DEBUG === '1';
+    const authResult = await resolveAutomationAuth(process.env, debugLogs);
+    const payload = {
+      accessToken: authResult.token,
+      email: authResult.email,
+      subject: authResult.subject,
+      idToken: authResult.idToken,
+      refreshToken: authResult.refreshToken,
+    };
+    console.log(JSON.stringify(payload, null, 2));
     return;
   }
 

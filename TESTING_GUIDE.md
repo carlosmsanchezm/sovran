@@ -12,8 +12,10 @@ Use the npm automation to provision a disposable workspace against the live Plat
 1. Export real-backend credentials:
    ```bash
    export AEGIS_GRPC_ADDR=platform.example.com:443
-   export AEGIS_TEST_TOKEN=$(aws secretsmanager get-secret-value ...)
-   export AEGIS_TEST_EMAIL=dev-user@example.com
+   export AEGIS_TEST_USERNAME=dev-user@example.com
+   export AEGIS_TEST_PASSWORD='super-secret-password'
+   export AEGIS_TEST_TOTP_SECRET='BASE32SECRET'  # optional, if the account requires TOTP
+   export AEGIS_TEST_EMAIL=dev-user@example.com # optional; derived from Keycloak claims otherwise
    export AEGIS_PROJECT_ID=p-demo
    # Optional TLS / infra knobs
    export AEGIS_PLATFORM_NAMESPACE=default

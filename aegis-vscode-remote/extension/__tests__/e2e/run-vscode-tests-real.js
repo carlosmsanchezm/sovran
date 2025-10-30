@@ -68,9 +68,6 @@ function ensureWorkspacePrepared() {
   if (session.metadata?.grpc_addr) {
     process.env.AEGIS_GRPC_ADDR = session.metadata.grpc_addr;
   }
-  if (session.user_token) {
-    process.env.AEGIS_TEST_TOKEN = session.user_token;
-  }
   if (process.env.AEGIS_E2E_DEBUG === '1') {
     console.log('[real-e2e] prepared session for workspace', session.workspace_id, 'email', process.env.AEGIS_TEST_EMAIL || '<missing>');
   }

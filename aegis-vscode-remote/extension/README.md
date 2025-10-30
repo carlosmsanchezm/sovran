@@ -92,7 +92,7 @@ Create (or update) a public client for the extension with:
 - **Grant type:** Authorization Code with PKCE
 - **Client authentication:** Disabled (public client)
 
-The extension requests the `openid profile email offline_access` scopes by default so that it can derive the `x-aegis-user` header from token claims and refresh access tokens silently.
+The extension requests the `openid profile email offline_access` scopes by default so that it can derive the authenticated identity from token claims and refresh access tokens silently.
 
 ## Real Backend E2E Automation
 
@@ -103,8 +103,9 @@ The `test:e2e:real` script provisions a live workspace, runs the heartbeat smoke
 Export the following variables before invoking the test command:
 
 - `AEGIS_GRPC_ADDR` – Fully qualified `host:port` for the Platform gRPC endpoint.
-- `AEGIS_TEST_TOKEN` – Bearer token with permission to upsert queues and submit workspaces.
-- `AEGIS_TEST_EMAIL` – Subject used for platform metadata headers.
+- `AEGIS_TEST_USERNAME` / `AEGIS_TEST_PASSWORD` – Keycloak credentials for the automation account.
+- `AEGIS_TEST_TOTP_SECRET` – Optional base32 secret for generating TOTP codes when MFA is enforced.
+- `AEGIS_TEST_EMAIL` – Optional override for the identity e-mail (auto-derived from Keycloak claims).
 - `AEGIS_PROJECT_ID` – Project under which the workspace should run.
 - Optional knobs:
   - `AEGIS_PLATFORM_NAMESPACE` (defaults to `default`).
