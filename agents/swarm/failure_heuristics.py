@@ -44,9 +44,9 @@ def analyze_ci_failure(diffs: Dict[str, str], test_result: Dict[str, Any]) -> Li
         edits.append({
             "path": "aegis-vscode-remote/extension/src/__tests__/unit/auth.test.ts",
             "instructions": (
-                "Add a unit test covering the environment-variable fast path in `requireSession` so that the `branches` "
-                "coverage increases. For example, assert that when `AEGIS_TEST_TOKEN` and `AEGIS_TEST_EMAIL` are set the "
-                "function returns the synthetic session without calling `vscode.authentication.getSession`."
+                "Add a unit test asserting that `requireSession` delegates to `vscode.authentication.getSession` so the "
+                "PKCE login path remains covered. Mock the VS Code API, invoke `requireSession(true)`, and verify the mock "
+                "was called with the expected provider ID and scopes."
             ),
         })
         return edits

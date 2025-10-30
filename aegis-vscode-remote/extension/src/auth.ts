@@ -1,5 +1,7 @@
 import * as crypto from 'crypto';
 import { URLSearchParams } from 'url';
+import * as path from 'path';
+import { promises as fs } from 'fs';
 import * as vscode from 'vscode';
 import { getSettings } from './config';
 import { getHttpDispatcher } from './http';
@@ -44,6 +46,105 @@ interface PendingAuth {
 }
 
 const sessionMetadata = new Map<string, { userHeader?: string }>();
+let automationSessionCache: vscode.AuthenticationSession | undefined;
+
+async function automationSessionFromEnv(): Promise<vscode.AuthenticationSession | undefined> {
+  if (automationSessionCache) {
+    return automationSessionCache;
+  }
+
+  const username = process.env.AEGIS_TEST_USERNAME?.trim();
+  const password = process.env.AEGIS_TEST_PASSWORD ?? '';
+  const sessionFromFile = await loadSessionFromWorkspaceFile();
+  if (sessionFromFile) {
+    const { token, email } = sessionFromFile;
+    const claims = parseJwt(token);
+    const { account, userHeader } = deriveAccountInfo(claims, email);
+    const session: vscode.AuthenticationSession = {
+      id: SESSION_ID,
+      accessToken: token,
+      account,
+      scopes: ['platform'],
+    };
+    sessionMetadata.set(SESSION_ID, { userHeader });
+    automationSessionCache = session;
+    return session;
+  }
+
+  if (!username || !password) {
+    return undefined;
+  }
+
+  const authority = (process.env.AEGIS_AUTH_AUTHORITY ?? 'https://keycloak.localtest.me/realms/aegis').trim().replace(/\/+$/u, '');
+  const clientId = process.env.AEGIS_AUTH_CLIENT_ID?.trim() || 'vscode-extension';
+  const audience = process.env.AEGIS_PLATFORM_AUTH_SCOPE?.trim() || process.env.AEGIS_AUTH_SCOPE?.trim();
+
+  const body = new URLSearchParams();
+  body.set('grant_type', 'password');
+  body.set('client_id', clientId);
+  body.set('username', username);
+  body.set('password', password);
+  if (audience) {
+    body.set('audience', audience);
+  }
+  const scope = ['openid', 'profile', 'email', 'offline_access'].join(' ');
+  body.set('scope', scope);
+
+  const tokenUrl = `${authority}/protocol/openid-connect/token`;
+  const response = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Automated Keycloak login failed (${response.status} ${response.statusText}).`);
+  }
+
+  const tokenResponse = (await response.json()) as TokenResponse;
+  const accessToken = tokenResponse.access_token?.trim();
+  if (!accessToken) {
+    throw new Error('Automated Keycloak login did not return an access token.');
+  }
+  const claims = parseJwt(tokenResponse.id_token ?? accessToken);
+  const { account, userHeader } = deriveAccountInfo(claims, username);
+
+  const session: vscode.AuthenticationSession = {
+    id: SESSION_ID,
+    accessToken,
+    account,
+    scopes: ['platform'],
+  };
+
+  sessionMetadata.set(SESSION_ID, { userHeader });
+  automationSessionCache = session;
+  return session;
+}
+
+async function loadSessionFromWorkspaceFile(): Promise<{ token: string; email?: string } | undefined> {
+  const candidates = new Set<string>();
+  const explicit = process.env.AEGIS_WORKSPACE_OUTPUT?.trim();
+  if (explicit) {
+    candidates.add(explicit);
+  }
+  candidates.add(path.resolve(__dirname, '..', '__tests__', 'e2e-real', '.workspace-session.json'));
+
+  for (const candidate of candidates) {
+    try {
+      const raw = await fs.readFile(candidate, 'utf8');
+      const parsed = JSON.parse(raw) as { user_token?: string | null; user_email?: string | null };
+      const token = parsed.user_token?.trim();
+      if (token) {
+        return { token, email: parsed.user_email ?? undefined };
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        console.warn('[auth] failed to read workspace session file', candidate, err);
+      }
+    }
+  }
+  return undefined;
+}
 
 function toBase64Url(buffer: Buffer) {
   return buffer
@@ -462,21 +563,25 @@ export async function initializeAuth(context: vscode.ExtensionContext) {
 }
 
 export async function requireSession(createIfNone = true): Promise<vscode.AuthenticationSession | undefined> {
-  const envToken = process.env.AEGIS_TEST_TOKEN?.trim();
-  if (envToken) {
-    const email = process.env.AEGIS_TEST_EMAIL?.trim() || 'aegis-user';
-    sessionMetadata.set(SESSION_ID, { userHeader: email });
-    return {
-      id: SESSION_ID,
-      accessToken: envToken,
-      account: {
-        id: email,
-        label: email,
-      },
-      scopes: ['platform'],
-    };
+  try {
+    return await vscode.authentication.getSession(AUTH_PROVIDER_ID, ['platform'], { createIfNone });
+  } catch (err) {
+    if (
+      createIfNone &&
+      err instanceof Error &&
+      /DialogService: refused to show dialog in tests/.test(err.message)
+    ) {
+      const existing = await vscode.authentication.getSession(AUTH_PROVIDER_ID, ['platform'], {
+        createIfNone: false,
+        silent: true,
+      });
+      if (existing) {
+        return existing;
+      }
+      return automationSessionFromEnv();
+    }
+    throw err;
   }
-  return vscode.authentication.getSession(AUTH_PROVIDER_ID, ['platform'], { createIfNone });
 }
 
 export async function signOut() {

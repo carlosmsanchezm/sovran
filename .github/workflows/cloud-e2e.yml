@@ -109,6 +109,15 @@ jobs:
           sudo chmod +x /usr/local/bin/grpcurl
           grpcurl --version
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
       - name: Configure preview endpoints
         id: configure
         env:
@@ -168,33 +177,45 @@ jobs:
           PLATFORM_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
           PROJECT_ID: ${{ format('p-cloud-e2e-il1-{0}', github.run_id) }}
           CLUSTER_ID: ${{ format('aegis-spoke-{0}', steps.ids.outputs.preview_release) }}
-          TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
-          TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
+          AEGIS_TEST_USERNAME: ${{ secrets.AEGIS_TEST_USERNAME }}
+          AEGIS_TEST_PASSWORD: ${{ secrets.AEGIS_TEST_PASSWORD }}
+          AEGIS_TEST_TOTP_SECRET: ${{ secrets.AEGIS_TEST_TOTP_SECRET }}
+          AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
+          AEGIS_AUTH_AUTHORITY: ${{ format('https://{0}/realms/aegis', steps.configure.outputs.keycloak_hostname) }}
+          AEGIS_AUTH_CLIENT_ID: vscode-extension
+          AEGIS_AUTH_REDIRECT_URI: vscode://aegis.aegis-remote/auth
         run: |
           set -euo pipefail
           HOST="${GRPC_ADDR}"
           CACERT="${GRPC_CA}"
-          AUTH="authorization: Bearer ${TEST_TOKEN}"
-          USER_HDR="x-aegis-user: ${TEST_EMAIL}"
+          TOKEN_PAYLOAD=$(npx ts-node aegis-vscode-remote/extension/scripts/prepare-real-workspace.ts --mode token)
+          ACCESS_TOKEN=$(echo "${TOKEN_PAYLOAD}" | jq -r '.accessToken // empty')
+          if [ -z "${ACCESS_TOKEN}" ]; then
+            echo "Failed to acquire automation access token" >&2
+            echo "Payload:" >&2
+            echo "${TOKEN_PAYLOAD}" >&2
+            exit 1
+          fi
+          AUTH="authorization: Bearer ${ACCESS_TOKEN}"
           NS_HDR="x-aegis-namespace: ${PLATFORM_NAMESPACE}"
 
-          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$NS_HDR" \
             -d '{"project":{"id":"'"${PROJECT_ID}"'","displayName":"Cloud E2E","ownerGroup":"aegis-dev","policy":{"regions":["us-east-1"],"dataLevel":"il1","denyEgressByDefault":false}}}' \
             "${HOST}" aegis.v1.AegisPlatform/CreateProject || true
 
-          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$NS_HDR" \
             -d '{"flavor":{"name":"cpu-small"}}' \
             "${HOST}" aegis.v1.AegisPlatform/UpsertFlavor || true
 
-          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$NS_HDR" \
             -d '{"queue":{"name":"default","projectId":"'"${PROJECT_ID}"'","priorityTier":"dev","allowedFlavors":["cpu-small"],"defaultMaxDurationSeconds":3600}}' \
             "${HOST}" aegis.v1.AegisPlatform/UpsertQueue || true
 
-          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$NS_HDR" \
             -d '{"clusterId":"'"${CLUSTER_ID}"'","provider":"aws","region":"us-east-1","ilLevel":"il1","labels":{"env":"cloud-e2e"}}' \
             "${HOST}" aegis.v1.AegisPlatform/RegisterCluster || true
 
-          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$NS_HDR" \
             -d '{"clusterId":"'"${CLUSTER_ID}"'","availableFlavors":[{"name":"cpu-small"}]}' \
             "${HOST}" aegis.v1.AegisPlatform/Heartbeat || true
 
@@ -224,7 +245,6 @@ jobs:
       AEGIS_PROJECT_ID: ${{ format('p-cloud-e2e-il1-{0}', github.run_id) }}
       AEGIS_TEST_CLUSTER_ID: ${{ format('aegis-spoke-{0}', needs.deploy-preview.outputs.preview_release) }}
       AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
-      AEGIS_TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
       AEGIS_E2E_DEBUG: '1'
       AEGIS_WORKSPACE_SUBMIT_ATTEMPTS: '12'
       AEGIS_WORKSPACE_SUBMIT_DELAY_MS: '10000'

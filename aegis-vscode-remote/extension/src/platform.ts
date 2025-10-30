@@ -285,10 +285,6 @@ class PlatformClient {
   private buildMetadata(session: vscode.AuthenticationSession): grpc.Metadata {
     const metadata = new grpc.Metadata();
     metadata.add('authorization', `Bearer ${session.accessToken}`);
-    const subject = getSessionUser(session) || session.account?.label || session.account?.id;
-    if (subject) {
-      metadata.add('x-aegis-user', subject);
-    }
     if (this.settings?.platform.namespace) {
       metadata.add('x-aegis-namespace', this.settings.platform.namespace);
     }
