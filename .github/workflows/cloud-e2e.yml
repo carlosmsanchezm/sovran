@@ -177,6 +177,8 @@ jobs:
           PLATFORM_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
           PROJECT_ID: ${{ format('p-cloud-e2e-il1-{0}', github.run_id) }}
           CLUSTER_ID: ${{ format('aegis-spoke-{0}', steps.ids.outputs.preview_release) }}
+          HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}
+          K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
           AEGIS_TEST_USERNAME: ${{ secrets.AEGIS_TEST_USERNAME }}
           AEGIS_TEST_PASSWORD: ${{ secrets.AEGIS_TEST_PASSWORD }}
           AEGIS_TEST_TOTP_SECRET: ${{ secrets.AEGIS_TEST_TOTP_SECRET }}
@@ -188,7 +190,34 @@ jobs:
           set -euo pipefail
           HOST="${GRPC_ADDR}"
           CACERT="${GRPC_CA}"
+          KEYCLOAK_SERVICE="${HELM_RELEASE}-keycloak"
+          KEYCLOAK_NAMESPACE="${K8S_NAMESPACE}"
+          if ! kubectl -n "${KEYCLOAK_NAMESPACE}" get svc "${KEYCLOAK_SERVICE}" >/dev/null 2>&1; then
+            KEYCLOAK_NAMESPACE="keycloak"
+          fi
+
+          PORT_FORWARD_PID=""
+          cleanup_port_forward() {
+            if [[ -n "${PORT_FORWARD_PID}" ]]; then
+              kill "${PORT_FORWARD_PID}" >/dev/null 2>&1 || true
+              wait "${PORT_FORWARD_PID}" >/dev/null 2>&1 || true
+              PORT_FORWARD_PID=""
+            fi
+          }
+
+          if kubectl -n "${KEYCLOAK_NAMESPACE}" get svc "${KEYCLOAK_SERVICE}" >/dev/null 2>&1; then
+            kubectl -n "${KEYCLOAK_NAMESPACE}" port-forward svc/"${KEYCLOAK_SERVICE}" 18443:8443 >"${RUNNER_TEMP}/keycloak-port-forward.log" 2>&1 &
+            PORT_FORWARD_PID=$!
+            trap cleanup_port_forward EXIT
+            # Give port-forward a moment to establish.
+            sleep 5
+            export AEGIS_AUTH_AUTHORITY="https://127.0.0.1:18443/realms/aegis"
+            export AEGIS_AUTH_TLS_SKIP_VERIFY=1
+          fi
+
           TOKEN_PAYLOAD=$(npx ts-node aegis-vscode-remote/extension/scripts/prepare-real-workspace.ts --mode token)
+          cleanup_port_forward
+          trap - EXIT
           ACCESS_TOKEN=$(echo "${TOKEN_PAYLOAD}" | jq -r '.accessToken // empty')
           if [ -z "${ACCESS_TOKEN}" ]; then
             echo "Failed to acquire automation access token" >&2
