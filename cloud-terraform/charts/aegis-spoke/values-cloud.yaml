@@ -3,7 +3,7 @@ k8sAgent:
   env:
     # TODO: Update these values for your cloud deployment
     AEGIS_CP_GRPC: "aegis-services-platform-api.aegis-system.svc.cluster.local:8081"
-    AEGIS_PROXY_INGRESS_HOST: "proxy.aegist.dev"
+    AEGIS_PROXY_INGRESS_HOST: "proxy.aegis.dev"
     AEGIS_CP_GRPC_INSECURE: "true"
 
 proxy:

@@ -84,7 +84,7 @@ README.md           # This document
 ## Prerequisites
 
 - VS Code Insiders (client) installed locally.
-- Node.js 20+ and npm for building the extension.
+- Node.js 20+ and npm for building the extension (a VSIX build runs inside a container).
 - `vsce` (`npm install -g @vscode/vsce`) to package the extension.
 - Docker Desktop when building the workspace image.
 - Access to Aegis Platform API and proxy endpoints (normally via `kubectl port-forward`).
@@ -145,6 +145,11 @@ docker push carlosmsanchez/aegis-workspace-mock:latest
 Reference the tagged image in your Kubernetes `Deployment`/`StatefulSet` so that every new pod uses
 the correct commit without a manual download.
 
+## Reference
+
+- [Workspace images](docs/workspace-images.md)
+- [VS Code extension packaging and installation](docs/vscode-extension.md)
+
 ## Local Development Workflow
 
 1. **Port-forward services**
@@ -162,7 +167,25 @@ the correct commit without a manual download.
      /Users/carlossanchez/code/sovran
    ```
 
-3. **Sign in** via the extension when prompted (uses VS Code authentication providers).
+3. **Sign in** via the extension (OAuth flow).
+
+   Ensure your VS Code settings include:
+
+   ```jsonc
+   {
+     "aegisRemote.auth.authority": "https://keycloak.localtest.me/realms/aegis",
+     "aegisRemote.auth.clientId": "vscode-extension",
+     "aegisRemote.auth.redirectUri": "vscode://aegis.aegis-remote/auth"
+   }
+   ```
+
+   Launch `Cmd+Shift+P → Aegis: Sign In`. A browser window opens to Keycloak; after completing login
+   (and MFA, if configured) you are redirected back to VS Code via `vscode://aegis.aegis-remote/auth`.
+   The extension stores the issued access/refresh tokens and derives the `x-aegis-user` header from
+   token claims automatically.
+
+   > **Note:** Register the Keycloak client as public, enable Authorization Code + PKCE, and allow
+   > the redirect URI `vscode://aegis.aegis-remote/auth`.
 
 4. **Refresh workspaces** (`Aegis: Refresh Workspaces`). The tree view lists live workspaces from
    Platform API. Clicking one triggers a connection using its ID.

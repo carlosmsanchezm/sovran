@@ -185,3 +185,9 @@ variable "proxy_lb_hostname" {
   type        = string
   default     = ""
 }
+
+variable "keycloak_lb_hostname" {
+  description = "Keycloak LoadBalancer hostname (populated after K8s deployment)"
+  type        = string
+  default     = ""
+}

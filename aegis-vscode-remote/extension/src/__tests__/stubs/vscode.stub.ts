@@ -83,11 +83,16 @@ export class ManagedResolvedAuthority {
 }
 
 export const Uri = {
-  parse: (value: string) => ({
-    toString: () => value,
-    path: value,
-    scheme: value.split(':')[0],
-  }),
+  parse: (value: string) => {
+    const url = new URL(value);
+    return {
+      toString: () => value,
+      path: url.pathname,
+      scheme: url.protocol.replace(/:$/u, ''),
+      authority: url.host,
+      query: url.search.startsWith('?') ? url.search.slice(1) : '',
+    };
+  },
 };
 
 export const env = {

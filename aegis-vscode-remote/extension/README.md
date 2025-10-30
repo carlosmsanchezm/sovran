@@ -52,6 +52,15 @@ Add these settings to your VS Code settings (Cmd+,):
   "aegisRemote.platform.namespace": "default",
   "aegisRemote.platform.authScope": "aegis-platform",
   "aegisRemote.platform.projectId": "p-demo",
+  "aegisRemote.auth.authority": "https://keycloak.localtest.me/realms/aegis",
+  "aegisRemote.auth.clientId": "vscode-extension",
+  "aegisRemote.auth.redirectUri": "vscode://aegis.aegis-remote/auth",
+  "aegisRemote.auth.scopes": [
+    "openid",
+    "profile",
+    "email",
+    "offline_access"
+  ],
   "aegisRemote.security.rejectUnauthorized": false,
   "aegisRemote.logLevel": "debug"
 }
@@ -61,8 +70,8 @@ Add these settings to your VS Code settings (Cmd+,):
 
 1. Start VS Code with proposed APIs enabled (see above)
 2. Sign in: `Cmd+Shift+P` → "Aegis: Sign In"
-   - Username: `dev-user@example.com`
-   - Token: `supersecret`
+   - A browser window opens to your Keycloak realm; complete the login/MFA flow.
+   - Keycloak redirects back to `vscode://aegis.aegis-remote/auth`, which VS Code routes to the extension.
 3. Connect to a workspace:
    - `Cmd+Shift+P` → "Aegis: Connect"
    - Or click a workspace in the "Aegis Workspaces" sidebar
@@ -73,6 +82,17 @@ If commands are not found or cause errors:
 - Ensure VS Code was launched with `--enable-proposed-api aegis.aegis-remote`
 - Check Developer Tools Console (Help → Toggle Developer Tools) for activation errors
 - View extension logs: `Cmd+Shift+P` → "Aegis: Show Logs"
+
+## Keycloak Client Configuration
+
+Create (or update) a public client for the extension with:
+
+- **Valid redirect URI:** `vscode://aegis.aegis-remote/auth`
+- **Web origins:** `vscode://aegis.aegis-remote` (optional for Keycloak ≥18)
+- **Grant type:** Authorization Code with PKCE
+- **Client authentication:** Disabled (public client)
+
+The extension requests the `openid profile email offline_access` scopes by default so that it can derive the `x-aegis-user` header from token claims and refresh access tokens silently.
 
 ## Real Backend E2E Automation
 

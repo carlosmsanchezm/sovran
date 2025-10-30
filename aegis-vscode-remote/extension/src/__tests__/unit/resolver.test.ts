@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, jest, test } from '@jest/globals';
+jest.mock('ws');
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -31,6 +32,35 @@ function createEmitter<T>() {
   };
 }
 
+type TestSettings = ReturnType<typeof config.getSettings>;
+
+const baseSettings: TestSettings = {
+  ...config.getSettings(),
+};
+
+type SettingsOverrides = {
+  security?: Partial<TestSettings['security']>;
+  platform?: Partial<TestSettings['platform']>;
+  auth?: Partial<TestSettings['auth']>;
+  heartbeatIntervalMs?: number;
+  idleTimeoutMs?: number;
+  logLevel?: TestSettings['logLevel'];
+  defaultWorkspaceId?: string;
+};
+
+function buildSettings(overrides: SettingsOverrides) {
+  return {
+    ...baseSettings,
+    heartbeatIntervalMs: overrides.heartbeatIntervalMs ?? baseSettings.heartbeatIntervalMs,
+    idleTimeoutMs: overrides.idleTimeoutMs ?? baseSettings.idleTimeoutMs,
+    logLevel: overrides.logLevel ?? baseSettings.logLevel,
+    defaultWorkspaceId: overrides.defaultWorkspaceId ?? baseSettings.defaultWorkspaceId,
+    security: { ...baseSettings.security, ...(overrides.security ?? {}) },
+    platform: { ...baseSettings.platform, ...(overrides.platform ?? {}) },
+    auth: { ...baseSettings.auth, ...(overrides.auth ?? {}) },
+  };
+}
+
 describe('AegisResolver', () => {
   afterEach(() => {
     jest.restoreAllMocks();
@@ -39,13 +69,9 @@ describe('AegisResolver', () => {
   });
 
   test('builds wss URL with /proxy/<wid> and applies TLS options', async () => {
-    jest.spyOn(config, 'getSettings').mockReturnValue({
-      heartbeatIntervalMs: 200,
-      idleTimeoutMs: 600,
-      logLevel: 'debug',
-      security: { rejectUnauthorized: true, caPath: '' },
-      defaultWorkspaceId: 'fallback',
-    });
+    jest.spyOn(config, 'getSettings').mockReturnValue(
+      buildSettings({ security: { rejectUnauthorized: true, caPath: '' } })
+    );
     jest.spyOn(platform, 'issueProxyTicket').mockResolvedValue({
       proxyUrl: 'https://127.0.0.1:7443',
       jwt: 'jwt-1',
@@ -79,13 +105,9 @@ describe('AegisResolver', () => {
 
   test('adds CA from settings and logs when read fails', async () => {
     const readFileSpy = jest.spyOn(fs.promises, 'readFile');
-    jest.spyOn(config, 'getSettings').mockReturnValue({
-      heartbeatIntervalMs: 200,
-      idleTimeoutMs: 600,
-      logLevel: 'debug',
-      security: { rejectUnauthorized: false, caPath: '/tmp/ca.pem' },
-      defaultWorkspaceId: 'fallback',
-    });
+    jest.spyOn(config, 'getSettings').mockReturnValue(
+      buildSettings({ security: { rejectUnauthorized: false, caPath: '/tmp/ca.pem' } })
+    );
 
     const constructed: Array<{ url: string; opts: any; transport: any }> = [];
     jest.spyOn(ConnectionManager.prototype, 'open').mockImplementation(function (this: any) {
@@ -123,13 +145,9 @@ describe('AegisResolver', () => {
   });
 
   test('handles diverse proxy url formats', async () => {
-    jest.spyOn(config, 'getSettings').mockReturnValue({
-      heartbeatIntervalMs: 200,
-      idleTimeoutMs: 600,
-      logLevel: 'debug',
-      security: { rejectUnauthorized: false, caPath: '' },
-      defaultWorkspaceId: 'wid',
-    });
+    jest.spyOn(config, 'getSettings').mockReturnValue(
+      buildSettings({ security: { rejectUnauthorized: false, caPath: '' }, defaultWorkspaceId: 'wid' })
+    );
 
     jest.spyOn(ConnectionManager.prototype, 'open').mockImplementation(async () => ({
       onDidReceiveMessage: jest.fn(),
@@ -167,13 +185,9 @@ describe('AegisResolver', () => {
     const caPath = path.join(tempDir, 'ca.pem');
     await fs.promises.writeFile(caPath, 'file-ca');
 
-    jest.spyOn(config, 'getSettings').mockReturnValue({
-      heartbeatIntervalMs: 200,
-      idleTimeoutMs: 600,
-      logLevel: 'debug',
-      security: { rejectUnauthorized: true, caPath },
-      defaultWorkspaceId: 'wid',
-    });
+    jest.spyOn(config, 'getSettings').mockReturnValue(
+      buildSettings({ security: { rejectUnauthorized: true, caPath }, defaultWorkspaceId: 'wid' })
+    );
 
     const constructed: Array<{ url: string; opts: any }> = [];
     jest.spyOn(ConnectionManager.prototype, 'open').mockImplementation(function (this: any) {
@@ -215,13 +229,9 @@ describe('AegisResolver', () => {
   });
 
   test('surface error for missing or invalid proxy url', async () => {
-    jest.spyOn(config, 'getSettings').mockReturnValue({
-      heartbeatIntervalMs: 200,
-      idleTimeoutMs: 600,
-      logLevel: 'debug',
-      security: { rejectUnauthorized: false, caPath: '' },
-      defaultWorkspaceId: 'wid',
-    });
+    jest.spyOn(config, 'getSettings').mockReturnValue(
+      buildSettings({ security: { rejectUnauthorized: false, caPath: '' }, defaultWorkspaceId: 'wid' })
+    );
 
     jest.spyOn(platform, 'issueProxyTicket').mockResolvedValue({
       proxyUrl: '',
@@ -244,13 +254,9 @@ describe('AegisResolver', () => {
 
   test('schedules renewal and triggers forceReconnect', async () => {
     const timeoutSpy = jest.spyOn(global, 'setTimeout');
-    jest.spyOn(config, 'getSettings').mockReturnValue({
-      heartbeatIntervalMs: 200,
-      idleTimeoutMs: 600,
-      logLevel: 'debug',
-      security: { rejectUnauthorized: false, caPath: '' },
-      defaultWorkspaceId: 'fallback',
-    });
+    jest.spyOn(config, 'getSettings').mockReturnValue(
+      buildSettings({ security: { rejectUnauthorized: false, caPath: '' }, defaultWorkspaceId: 'fallback' })
+    );
 
     let transportEnd: jest.Mock | undefined;
     jest.spyOn(ConnectionManager.prototype, 'open').mockImplementation(function (this: any) {
@@ -292,13 +298,9 @@ describe('AegisResolver', () => {
   });
 
   test('forceReconnect ends active transport once', async () => {
-    jest.spyOn(config, 'getSettings').mockReturnValue({
-      heartbeatIntervalMs: 200,
-      idleTimeoutMs: 600,
-      logLevel: 'debug',
-      security: { rejectUnauthorized: false, caPath: '' },
-      defaultWorkspaceId: 'wid',
-    });
+    jest.spyOn(config, 'getSettings').mockReturnValue(
+      buildSettings({ security: { rejectUnauthorized: false, caPath: '' }, defaultWorkspaceId: 'wid' })
+    );
 
     const transport = {
       onDidReceiveMessage: createEmitter<Uint8Array>().event,
@@ -327,13 +329,15 @@ describe('AegisResolver', () => {
   });
 
   test('resolve falls back to default workspace id when authority omits wid', async () => {
-    jest.spyOn(config, 'getSettings').mockReturnValue({
-      heartbeatIntervalMs: 100,
-      idleTimeoutMs: 400,
-      logLevel: 'info',
-      security: { rejectUnauthorized: false, caPath: '' },
-      defaultWorkspaceId: 'fallback-wid',
-    });
+    jest.spyOn(config, 'getSettings').mockReturnValue(
+      buildSettings({
+        heartbeatIntervalMs: 100,
+        idleTimeoutMs: 400,
+        logLevel: 'info',
+        security: { rejectUnauthorized: false, caPath: '' },
+        defaultWorkspaceId: 'fallback-wid',
+      })
+    );
 
     const ticketSpy = jest.spyOn(platform, 'issueProxyTicket').mockResolvedValue({
       proxyUrl: 'https://proxy.example.com',
