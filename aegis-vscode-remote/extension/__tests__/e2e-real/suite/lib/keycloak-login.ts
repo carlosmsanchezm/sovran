@@ -1,90 +1,111 @@
-import { chromium, Page } from 'playwright';
-import { authenticator } from 'otplib';
-
 type LoginResult = {
   redirectUri: string;
-  secretUsed?: string;
 };
 
 type LoginOptions = {
   username: string;
   password: string;
   totpSecret?: string;
-  deviceName?: string;
   loginTimeoutMs?: number;
 };
 
-function normalizeSecret(raw: string | undefined): string | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  return raw.replace(/\s+/g, '').trim();
-}
+class SimpleCookieJar {
+  private readonly store = new Map<string, string>();
 
-async function fillLogin(page: Page, username: string, password: string): Promise<void> {
-  const userInput = page.locator('input[name="username"], input#username, input#email');
-  await userInput.first().waitFor({ timeout: 15000 });
-  await userInput.first().fill(username);
-
-  const passwordInput = page.locator('input[name="password"], input#password');
-  await passwordInput.first().fill(password);
-
-  const loginButton = page.locator('input[type="submit"], button[name="login"], input#kc-login, button#kc-login');
-  await loginButton.first().click();
-}
-
-async function extractTotpSecret(page: Page): Promise<string | undefined> {
-  const secretContainer = page.locator('#kc-totp-secret-key, #kc-otp-secret-key');
-  if (await secretContainer.count()) {
-    const text = await secretContainer.first().innerText();
-    const normalized = normalizeSecret(text);
-    if (normalized) {
-      console.warn('[keycloak-login] Detected TOTP secret on setup page:', normalized);
-      return normalized;
+  add(header: string): void {
+    const [pair] = header.split(';', 1);
+    if (!pair) {
+      return;
     }
-  }
-  const inlineSecret = page.locator('code[data-kc-locale="otpSecret"]');
-  if (await inlineSecret.count()) {
-    const text = await inlineSecret.first().innerText();
-    const normalized = normalizeSecret(text);
-    if (normalized) {
-      console.warn('[keycloak-login] Detected TOTP secret from inline code element:', normalized);
-      return normalized;
+    const eq = pair.indexOf('=');
+    if (eq <= 0) {
+      return;
     }
-  }
-  return undefined;
-}
-
-async function fillTotp(page: Page, secret: string, deviceName?: string): Promise<void> {
-  const normalized = normalizeSecret(secret);
-  if (!normalized) {
-    throw new Error('TOTP secret not available for MFA step');
-  }
-
-  authenticator.options = { window: 1, step: 30, digits: 6 };
-  const code = authenticator.generate(normalized);
-
-  const totpInput = page.locator('input[name="otp"], input[name="totp"], input#kc-totp-code, input#totp');
-  await totpInput.first().waitFor({ timeout: 15000 });
-  await totpInput.first().fill(code);
-
-  const deviceInput = page.locator('input[name="userLabel"], input#userLabel');
-  if (await deviceInput.count()) {
-    const currentValue = (await deviceInput.first().inputValue()).trim();
-    if (!currentValue) {
-      await deviceInput.first().fill(deviceName || 'automation-device');
+    const name = pair.slice(0, eq).trim();
+    const value = pair.slice(eq + 1).trim();
+    if (name) {
+      this.store.set(name, value);
     }
   }
 
-  const totpSubmit = page.locator('input[type="submit"], button[name="login"], button#kc-totp-login, input#kc-submit, button#kc-submit');
-  await totpSubmit.first().click();
+  header(): string {
+    return Array.from(this.store.entries())
+      .map(([name, value]) => `${name}=${value}`)
+      .join('; ');
+  }
 }
 
-async function maybeAcceptConsent(page: Page): Promise<void> {
-  const acceptButton = page.locator('button[name="accept"], input#kc-accept, button#kc-accept');
-  if (await acceptButton.count()) {
-    await acceptButton.first().click();
+async function fetchWithCookies(url: string, init: RequestInit, jar: SimpleCookieJar): Promise<Response> {
+  const headers = new Headers(init.headers ?? {});
+  const cookieHeader = jar.header();
+  if (cookieHeader) {
+    headers.set('cookie', cookieHeader);
   }
+
+  const response = await fetch(url, {
+    ...init,
+    headers,
+    redirect: 'manual',
+  });
+
+  const headerAccessor = response.headers as unknown as { getSetCookie?: () => string[] };
+  const setCookies = headerAccessor.getSetCookie?.();
+  if (Array.isArray(setCookies) && setCookies.length > 0) {
+    for (const cookie of setCookies) {
+      jar.add(cookie);
+    }
+  } else {
+    const raw = response.headers.get('set-cookie');
+    if (raw) {
+      jar.add(raw);
+    }
+  }
+
+  return response;
+}
+
+function sliceFormHtml(markup: string, startIndex: number): string {
+  const closeIndex = markup.indexOf('</form', startIndex);
+  if (closeIndex === -1) {
+    return markup.slice(startIndex);
+  }
+  return markup.slice(startIndex, closeIndex);
+}
+
+function parseForm(markup: string, baseUrl: string): { actionUrl: string; inputs: Record<string, string> } {
+  const formMatch = markup.match(/<form[^>]*action=["']([^"']+)["'][^>]*>/i);
+  if (!formMatch) {
+    throw new Error('Failed to locate Keycloak form action.');
+  }
+  const actionUrl = new URL(formMatch[1], baseUrl).toString();
+  const startIndex = formMatch.index ?? 0;
+  const formHtml = sliceFormHtml(markup, startIndex);
+
+  const inputs: Record<string, string> = {};
+  const inputRegex = /<input[^>]*name=["']([^"']+)["'][^>]*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = inputRegex.exec(formHtml)) !== null) {
+    const name = match[1];
+    const valueMatch = match[0].match(/value=["']([^"']*)["']/i);
+    inputs[name] = valueMatch ? valueMatch[1] : '';
+  }
+  return { actionUrl, inputs };
+}
+
+function buildFormData(inputs: Record<string, string>, overrides: Record<string, string>): URLSearchParams {
+  const data = new URLSearchParams();
+  for (const [name, value] of Object.entries(inputs)) {
+    const override = overrides[name];
+    if (override !== undefined) {
+      data.set(name, override);
+      continue;
+    }
+    data.set(name, value ?? '');
+  }
+  for (const [name, value] of Object.entries(overrides)) {
+    data.set(name, value);
+  }
+  return data;
 }
 
 export async function performKeycloakLogin(authUrl: string, opts: LoginOptions): Promise<LoginResult> {
@@ -92,75 +113,90 @@ export async function performKeycloakLogin(authUrl: string, opts: LoginOptions):
     username,
     password,
     totpSecret,
-    deviceName = 'automation-device',
     loginTimeoutMs = 120_000,
   } = opts;
 
-  let redirectUri: string | undefined;
-  let secretUsed = normalizeSecret(totpSecret);
+  const deadline = Date.now() + Math.max(loginTimeoutMs, 30_000);
+  const jar = new SimpleCookieJar();
 
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const context = await browser.newContext();
-    const page = await context.newPage();
-
-    page.on('request', (request) => {
-      const url = request.url();
-      if (url.startsWith('vscode://')) {
-        redirectUri = url;
-      }
-    });
-
-    const navPromise = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: loginTimeoutMs }).catch(() => undefined);
-    await page.goto(authUrl, { waitUntil: 'domcontentloaded', timeout: loginTimeoutMs });
-    await navPromise;
-
-    if (page.url().startsWith('vscode://')) {
-      redirectUri = page.url();
-    }
-
-    if (!redirectUri) {
-      try {
-        await fillLogin(page, username, password);
-        await page.waitForLoadState('domcontentloaded', { timeout: loginTimeoutMs }).catch(() => undefined);
-      } catch (err) {
-        console.error('[keycloak-login] Failed during username/password step', err);
-        throw err;
-      }
-    }
-
-    if (!redirectUri) {
-      if (!secretUsed) {
-        secretUsed = await extractTotpSecret(page) || secretUsed;
-      }
-      const totpPresent = await page.locator('input[name="otp"], input[name="totp"], input#kc-totp-code, input#totp').count();
-      if (totpPresent > 0) {
-        await fillTotp(page, secretUsed ?? '', deviceName);
-        await page.waitForLoadState('domcontentloaded', { timeout: loginTimeoutMs }).catch(() => undefined);
-      }
-    }
-
-    if (!redirectUri) {
-      await maybeAcceptConsent(page);
-      await page.waitForLoadState('domcontentloaded', { timeout: loginTimeoutMs }).catch(() => undefined);
-    }
-
-    const successDeadline = Date.now() + loginTimeoutMs;
-    while (!redirectUri && Date.now() < successDeadline) {
-      const url = page.url();
-      if (url.startsWith('vscode://')) {
-        redirectUri = url;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-
-    if (!redirectUri) {
-      throw new Error('Failed to capture vscode:// redirect from Keycloak login flow');
-    }
-
-    return { redirectUri, secretUsed };
-  } finally {
-    await browser.close();
+  let response = await fetchWithCookies(authUrl, { method: 'GET' }, jar);
+  if (response.status !== 200) {
+    throw new Error(`Failed to load Keycloak login page (HTTP ${response.status}).`);
   }
+  let body = await response.text();
+  let form = parseForm(body, response.url ?? authUrl);
+  const loginData = buildFormData(form.inputs, {
+    username,
+    password,
+    credentialId: '',
+  });
+
+  response = await fetchWithCookies(form.actionUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: loginData.toString(),
+  }, jar);
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (Date.now() > deadline) {
+      throw new Error('Timed out waiting for Keycloak to issue redirect.');
+    }
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      if (!location) {
+        throw new Error('Keycloak redirect missing Location header.');
+      }
+      const absolute = new URL(location, response.url ?? authUrl).toString();
+      if (absolute.startsWith('vscode://')) {
+        return { redirectUri: absolute };
+      }
+      response = await fetchWithCookies(absolute, { method: 'GET' }, jar);
+      if (response.status === 200) {
+        body = await response.text();
+        if (/name=["']otp["']/.test(body) || /name=["']totp["']/.test(body)) {
+          throw new Error('Keycloak is prompting for TOTP, but this environment is not configured with AEGIS_TEST_TOTP_SECRET.');
+        }
+        if (/id=["']kc-form-login["']/.test(body)) {
+          throw new Error('Keycloak login failed. Verify username/password credentials.');
+        }
+      }
+      continue;
+    }
+
+    if (response.status === 200) {
+      body = await response.text();
+      if (/name=["']otp["']/.test(body) || /name=["']totp["']/.test(body)) {
+        if (!totpSecret) {
+          throw new Error('Keycloak is prompting for TOTP, but AEGIS_TEST_TOTP_SECRET is not set.');
+        }
+        throw new Error('Keycloak TOTP flow is not supported in this automation path.');
+      }
+      if (/window\.location\.href\s*=\s*"(vscode:[^"]+)"/.test(body)) {
+        const redirect = body.match(/window\.location\.href\s*=\s*"(vscode:[^"]+)"/);
+        if (redirect?.[1]) {
+          return { redirectUri: redirect[1] };
+        }
+      }
+      const metaRefresh = body.match(/http-equiv=["']refresh["'][^>]*url=([^"' >]+)/i);
+      if (metaRefresh?.[1]) {
+        const absolute = new URL(metaRefresh[1], response.url ?? authUrl).toString();
+        if (absolute.startsWith('vscode://')) {
+          return { redirectUri: absolute };
+        }
+        response = await fetchWithCookies(absolute, { method: 'GET' }, jar);
+        continue;
+      }
+      if (/id=["']kc-error-message["']/.test(body) || /login-error/.test(body)) {
+        throw new Error('Keycloak reported an authentication error during login.');
+      }
+      throw new Error('Failed to capture Keycloak redirect after login.');
+    }
+
+    throw new Error(`Unexpected Keycloak response status ${response.status}.`);
+  }
+
+  throw new Error('Exceeded redirect attempts while logging into Keycloak.');
 }

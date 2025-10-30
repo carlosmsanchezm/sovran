@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, jest, test } from '@jest/globals';
+jest.mock('ws');
 import { AegisResolver } from '../../resolver';
 import { ConnectionManager } from '../../connection';
 import { status } from '../stubs/ui.stub';

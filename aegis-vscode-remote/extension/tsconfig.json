@@ -15,6 +15,7 @@
     "__tests__/e2e",
     "__tests__/e2e-real",
     "test-results",
-    "scripts"
+    "scripts",
+    "__mocks__"
   ]
 }

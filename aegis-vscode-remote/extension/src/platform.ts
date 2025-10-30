@@ -211,6 +211,11 @@ class PlatformClient {
     return new Promise<WorkspaceSummary[]>((resolve, reject) => {
       this.client!.ListWorkloads({ project_id: projectId }, metadata, (err, response) => {
         if (err) {
+          if ((err as grpc.ServiceError)?.code === grpc.status.NOT_FOUND) {
+            out.appendLine(`[platform] project ${projectId} not found; treating as empty workspace list`);
+            resolve([]);
+            return;
+          }
           reject(err);
           return;
         }
