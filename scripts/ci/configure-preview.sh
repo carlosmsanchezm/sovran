@@ -279,6 +279,7 @@ if [[ -n "${MANAGED_KEYCLOAK_BASE_URL}" && -n "${KEYCLOAK_DNS}" ]]; then
   if [[ -n "${managed_keycloak_ip}" ]]; then
     log "  Managed Keycloak reachable at ${managed_keycloak_ip}:${KEYCLOAK_PORT}"
   fi
+  KEYCLOAK_IP="${managed_keycloak_ip}"
 elif [[ -n "${KEYCLOAK_LB}" ]]; then
   KEYCLOAK_IP="$(pick_reachable_ip "${KEYCLOAK_LB}" "${KEYCLOAK_PORT}")"
 fi
