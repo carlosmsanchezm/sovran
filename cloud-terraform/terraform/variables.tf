@@ -191,3 +191,9 @@ variable "keycloak_lb_hostname" {
   type        = string
   default     = ""
 }
+
+variable "manage_keycloak_dns" {
+  description = "Set to true to allow Terraform to manage the keycloak.aegis.dev DNS record"
+  type        = bool
+  default     = false
+}

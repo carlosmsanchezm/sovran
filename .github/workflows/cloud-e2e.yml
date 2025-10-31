@@ -21,6 +21,8 @@ jobs:
     timeout-minutes: 90
     env:
       AEGIS_AUTH_DISABLE_OFFLINE: '1'
+      KEYCLOAK_BASE_URL: ${{ secrets.KEYCLOAK_BASE_URL }}
+      KEYCLOAK_REALM: ${{ secrets.KEYCLOAK_REALM }}
     outputs:
       preview_id: ${{ steps.ids.outputs.preview_id }}
       preview_namespace: ${{ steps.ids.outputs.preview_namespace }}

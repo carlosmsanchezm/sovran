@@ -294,5 +294,5 @@ output "dns_proxy" {
 
 output "dns_keycloak" {
   description = "DNS hostname for Keycloak"
-  value       = aws_route53_record.keycloak.fqdn
+  value       = var.manage_keycloak_dns && length(aws_route53_record.keycloak) > 0 ? aws_route53_record.keycloak[0].fqdn : ""
 }

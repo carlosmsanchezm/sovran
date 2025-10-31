@@ -14,6 +14,9 @@ fi
 TERRAFORM_DIR="${TERRAFORM_DIR:-cloud-terraform/terraform}"
 CA_BUNDLE="${CA_BUNDLE:-${HOME}/aegis-platform-api-ca.crt}"
 
+MANAGED_KEYCLOAK_BASE_URL="${MANAGED_KEYCLOAK_BASE_URL:-${KEYCLOAK_BASE_URL:-}}"
+MANAGED_KEYCLOAK_REALM="${MANAGED_KEYCLOAK_REALM:-${KEYCLOAK_REALM:-aegis}}"
+
 if [[ ! -d "${TERRAFORM_DIR}" ]]; then
   echo "Terraform directory ${TERRAFORM_DIR} not found" >&2
   exit 1
@@ -100,28 +103,34 @@ log "Waiting for preview LoadBalancers..."
 PLATFORM_LB="$(wait_for_lb "${HELM_RELEASE}-platform-api" "${K8S_NAMESPACE}")"
 PROXY_LB="$(wait_for_lb "${HELM_RELEASE}-proxy" "${K8S_NAMESPACE}")"
 
-# Keycloak may be deployed in a dedicated namespace; try release namespace first, then fallback
-KEYCLOAK_LB="$(wait_for_lb "${HELM_RELEASE}-keycloak" "${K8S_NAMESPACE}")"
-if [[ -z "${KEYCLOAK_LB}" ]]; then
-  KEYCLOAK_LB="$(wait_for_lb "${HELM_RELEASE}-keycloak" "keycloak")"
-fi
+KEYCLOAK_LB=""
 KEYCLOAK_PORT=""
 KEYCLOAK_SCHEME="https"
 
-if kubectl get svc "${HELM_RELEASE}-keycloak" -n "${K8S_NAMESPACE}" >/dev/null 2>&1; then
-  KEYCLOAK_PORT="$(kubectl get svc "${HELM_RELEASE}-keycloak" -n "${K8S_NAMESPACE}" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || echo "")"
-elif kubectl get svc "${HELM_RELEASE}-keycloak" -n keycloak >/dev/null 2>&1; then
-  KEYCLOAK_PORT="$(kubectl get svc "${HELM_RELEASE}-keycloak" -n keycloak -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || echo "")"
-fi
+if [[ -z "${MANAGED_KEYCLOAK_BASE_URL}" ]]; then
+  # Keycloak may be deployed in a dedicated namespace; try release namespace first, then fallback
+  KEYCLOAK_LB="$(wait_for_lb "${HELM_RELEASE}-keycloak" "${K8S_NAMESPACE}")"
+  if [[ -z "${KEYCLOAK_LB}" ]]; then
+    KEYCLOAK_LB="$(wait_for_lb "${HELM_RELEASE}-keycloak" "keycloak")"
+  fi
 
-if [[ -z "${KEYCLOAK_PORT}" ]]; then
-  KEYCLOAK_PORT="8080"
-fi
+  if kubectl get svc "${HELM_RELEASE}-keycloak" -n "${K8S_NAMESPACE}" >/dev/null 2>&1; then
+    KEYCLOAK_PORT="$(kubectl get svc "${HELM_RELEASE}-keycloak" -n "${K8S_NAMESPACE}" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || echo "")"
+  elif kubectl get svc "${HELM_RELEASE}-keycloak" -n keycloak >/dev/null 2>&1; then
+    KEYCLOAK_PORT="$(kubectl get svc "${HELM_RELEASE}-keycloak" -n keycloak -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || echo "")"
+  fi
 
-if [[ "${KEYCLOAK_PORT}" == "443" ]]; then
-  KEYCLOAK_SCHEME="https"
+  if [[ -z "${KEYCLOAK_PORT}" ]]; then
+    KEYCLOAK_PORT="8080"
+  fi
+
+  if [[ "${KEYCLOAK_PORT}" == "443" ]]; then
+    KEYCLOAK_SCHEME="https"
+  else
+    KEYCLOAK_SCHEME="http"
+  fi
 else
-  KEYCLOAK_SCHEME="http"
+  log "Using managed Keycloak endpoint: ${MANAGED_KEYCLOAK_BASE_URL} (realm ${MANAGED_KEYCLOAK_REALM})"
 fi
 
 if [[ -z "${PLATFORM_LB}" || -z "${PROXY_LB}" ]]; then
@@ -141,7 +150,7 @@ apply_cmd=(
 )
 
 if [[ -n "${KEYCLOAK_LB}" ]]; then
-  apply_cmd+=( -var="keycloak_lb_hostname=${KEYCLOAK_LB}" -target=aws_route53_record.keycloak )
+  apply_cmd+=( -var="keycloak_lb_hostname=${KEYCLOAK_LB}" -var="manage_keycloak_dns=true" -target=aws_route53_record.keycloak )
 fi
 
 ${apply_cmd[@]}
@@ -154,6 +163,59 @@ popd >/dev/null
 PLATFORM_DNS="${PLATFORM_DNS%.}"
 PROXY_DNS="${PROXY_DNS%.}"
 KEYCLOAK_DNS="${KEYCLOAK_DNS%.}"
+
+if [[ -n "${MANAGED_KEYCLOAK_BASE_URL}" ]]; then
+  managed_parse_output=$(python3 - <<'PY' "${MANAGED_KEYCLOAK_BASE_URL}" "${MANAGED_KEYCLOAK_REALM}"
+import sys
+from urllib.parse import urlparse
+
+base = sys.argv[1].strip()
+realm = sys.argv[2].strip() or "aegis"
+
+if not base:
+    print("Managed Keycloak base URL is empty", file=sys.stderr)
+    sys.exit(1)
+
+if not base.startswith(("http://", "https://")):
+    base = "https://" + base
+
+parsed = urlparse(base)
+scheme = parsed.scheme or "https"
+host = parsed.hostname or ""
+
+if not host:
+    print("Unable to parse Keycloak host from base URL", file=sys.stderr)
+    sys.exit(1)
+
+default_port = 443 if scheme == "https" else 80
+port = parsed.port or default_port
+
+path = (parsed.path or "").rstrip("/")
+realm_path = f"/realms/{realm}".rstrip("/")
+
+if not path:
+    authority_path = realm_path
+else:
+    lower_path = path.lower()
+    lower_realm = realm_path.lower()
+    if lower_path.endswith(lower_realm):
+        authority_path = path
+    else:
+        separator = "" if path.endswith("/") else "/"
+        authority_path = f"{path}{separator}{realm_path.lstrip('/')}"
+
+authority = f"{scheme}://{host}"
+if port != default_port:
+    authority += f":{port}"
+authority += authority_path
+
+print(f"{scheme} {host} {port} {authority.rstrip('/')}")
+PY
+  ) || exit 1
+
+  read -r KEYCLOAK_SCHEME KEYCLOAK_HOST_FROM_BASE KEYCLOAK_PORT KEYCLOAK_AUTHORITY <<<"${managed_parse_output}"
+  KEYCLOAK_DNS="${KEYCLOAK_HOST_FROM_BASE}"
+fi
 
 if [[ -z "${PLATFORM_DNS}" || -z "${PROXY_DNS}" ]]; then
   log "Terraform did not return DNS records"
@@ -171,15 +233,17 @@ if [[ -n "${KEYCLOAK_LB}" && -n "${KEYCLOAK_DNS}" ]]; then
   log "  ${KEYCLOAK_DNS} → ${KEYCLOAK_LB}"
 fi
 
-KEYCLOAK_AUTHORITY=""
-if [[ -n "${KEYCLOAK_DNS}" ]]; then
-  KEYCLOAK_AUTHORITY="${KEYCLOAK_SCHEME}://${KEYCLOAK_DNS}"
-  if [[ "${KEYCLOAK_SCHEME}" == "http" && "${KEYCLOAK_PORT}" != "80" ]]; then
-    KEYCLOAK_AUTHORITY+=":${KEYCLOAK_PORT}"
-  elif [[ "${KEYCLOAK_SCHEME}" == "https" && "${KEYCLOAK_PORT}" != "443" && -n "${KEYCLOAK_PORT}" ]]; then
-    KEYCLOAK_AUTHORITY+=":${KEYCLOAK_PORT}"
+if [[ -z "${MANAGED_KEYCLOAK_BASE_URL}" ]]; then
+  KEYCLOAK_AUTHORITY=""
+  if [[ -n "${KEYCLOAK_DNS}" ]]; then
+    KEYCLOAK_AUTHORITY="${KEYCLOAK_SCHEME}://${KEYCLOAK_DNS}"
+    if [[ "${KEYCLOAK_SCHEME}" == "http" && "${KEYCLOAK_PORT}" != "80" ]]; then
+      KEYCLOAK_AUTHORITY+=":${KEYCLOAK_PORT}"
+    elif [[ "${KEYCLOAK_SCHEME}" == "https" && "${KEYCLOAK_PORT}" != "443" && -n "${KEYCLOAK_PORT}" ]]; then
+      KEYCLOAK_AUTHORITY+=":${KEYCLOAK_PORT}"
+    fi
+    KEYCLOAK_AUTHORITY+="/realms/aegis"
   fi
-  KEYCLOAK_AUTHORITY+="/realms/aegis"
 fi
 
 TARGET_PROXY_BASE="wss://${PROXY_DNS}:8080"
@@ -203,8 +267,12 @@ log "Resolving LoadBalancer IPs for local /etc/hosts overrides"
 PLATFORM_IP="$(pick_reachable_ip "${PLATFORM_LB}" 8081)"
 PROXY_IP="$(pick_reachable_ip "${PROXY_LB}" 8080)"
 KEYCLOAK_IP=""
-
-if [[ -n "${KEYCLOAK_LB}" ]]; then
+if [[ -n "${MANAGED_KEYCLOAK_BASE_URL}" && -n "${KEYCLOAK_DNS}" ]]; then
+  managed_keycloak_ip="$(pick_reachable_ip "${KEYCLOAK_DNS}" "${KEYCLOAK_PORT}")"
+  if [[ -n "${managed_keycloak_ip}" ]]; then
+    log "  Managed Keycloak reachable at ${managed_keycloak_ip}:${KEYCLOAK_PORT}"
+  fi
+elif [[ -n "${KEYCLOAK_LB}" ]]; then
   KEYCLOAK_IP="$(pick_reachable_ip "${KEYCLOAK_LB}" "${KEYCLOAK_PORT}")"
 fi
 
@@ -234,7 +302,7 @@ if [[ -n "${PROXY_IP}" ]]; then
   echo "${PROXY_IP} ${PROXY_DNS}" | sudo tee -a /etc/hosts >/dev/null
 fi
 
-if [[ -n "${KEYCLOAK_IP}" && -n "${KEYCLOAK_DNS}" ]]; then
+if [[ -n "${KEYCLOAK_IP}" && -n "${KEYCLOAK_DNS}" && -z "${MANAGED_KEYCLOAK_BASE_URL}" ]]; then
   log "  Keycloak IP: ${KEYCLOAK_IP}"
   sudo sed -i.bak "/${KEYCLOAK_DNS}/d" /etc/hosts 2>/dev/null || true
   echo "${KEYCLOAK_IP} ${KEYCLOAK_DNS}" | sudo tee -a /etc/hosts >/dev/null
