@@ -116,6 +116,14 @@ const DEFAULT_OUTPUT_PATH = path.resolve(__dirname, '../__tests__/e2e-real/.work
 const DEFAULT_CA_OUTPUT_PATH = path.resolve(__dirname, '../__tests__/e2e-real/.workspace-ca.pem');
 const PROTO_PATH = path.resolve(__dirname, '../proto/aegis_platform.proto');
 
+function normalizeUserIdentifier(value: string | undefined | null): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function parseArgs(argv: string[]): CliOverrides {
   const overrides: CliOverrides = {};
   for (let i = 2; i < argv.length; i += 1) {
@@ -212,6 +220,21 @@ interface AutomationAuthResult {
   subject?: string;
   idToken?: string;
   refreshToken?: string;
+}
+
+class KeycloakTokenExchangeError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly statusText: string,
+    public readonly body: string
+  ) {
+    super(`Keycloak token exchange failed (${status} ${statusText}): ${body.slice(0, 500)}`);
+    this.name = 'KeycloakTokenExchangeError';
+  }
+
+  get offlineAccessNotAllowed(): boolean {
+    return /not_allowed/i.test(this.body) && /offline/i.test(this.body);
+  }
 }
 
 interface DerivedAccountInfo {
@@ -334,87 +357,42 @@ async function resolveAutomationAuth(env: NodeJS.ProcessEnv, debugLogs: boolean)
         );
       }
 
+      const offlineScope = 'offline_access';
       const baseScopes = normalizeScopes(env.AEGIS_AUTH_SCOPES);
       if (baseScopes.length === 0) {
-        baseScopes.push('openid', 'profile', 'email', 'offline_access');
+        baseScopes.push('openid', 'profile', 'email', offlineScope);
       }
-      const extraScopes = [
+      let extraScopes = [
         ...normalizeScopes(env.AEGIS_AUTH_ADDITIONAL_SCOPES),
         ...normalizeScopes(env.AEGIS_AUTH_REQUESTED_SCOPES),
         ...normalizeScopes(env.AEGIS_AUTH_EXTRA_SCOPES),
       ];
+      const disableOffline = [
+        env.AEGIS_AUTH_DISABLE_OFFLINE,
+        env.AEGIS_DISABLE_OFFLINE_SCOPE,
+      ]
+        .map((value) => (value ?? '').trim().toLowerCase())
+        .some((value) => value === '1' || value === 'true' || value === 'yes');
+      if (disableOffline) {
+        for (let i = baseScopes.length - 1; i >= 0; i -= 1) {
+          if (baseScopes[i] === offlineScope) {
+            baseScopes.splice(i, 1);
+          }
+        }
+        extraScopes = extraScopes.filter((scopeName) => scopeName !== offlineScope);
+        if (debugLogs) {
+          console.warn('[prepare-real-workspace] offline_access scope disabled via environment overrides');
+        }
+      }
       const audience = env.AEGIS_PLATFORM_AUTH_SCOPE?.trim()
         || env.AEGIS_AUTH_SCOPE?.trim()
         || env.AEGIS_PLATFORM_AUTH_AUDIENCE?.trim();
-      const scope = buildScope(baseScopes, audience, extraScopes);
-
-      const { verifier, challenge } = createPkcePair();
-      const state = toBase64Url(crypto.randomBytes(18));
-
-      const authUrl = new URL(`${authority}/protocol/openid-connect/auth`);
-      authUrl.searchParams.set('client_id', clientId);
-      authUrl.searchParams.set('redirect_uri', redirectUri);
-      authUrl.searchParams.set('response_type', 'code');
-      authUrl.searchParams.set('scope', scope);
-      authUrl.searchParams.set('code_challenge', challenge);
-      authUrl.searchParams.set('code_challenge_method', 'S256');
-      authUrl.searchParams.set('state', state);
-      if (prompt) {
-        authUrl.searchParams.set('prompt', prompt);
-      }
-      if (loginHint) {
-        authUrl.searchParams.set('login_hint', loginHint);
-      }
-      if (audienceParam) {
-        authUrl.searchParams.set('audience', audienceParam);
-      }
-
-      if (debugLogs) {
-        console.log('[prepare-real-workspace] acquiring automation token via Keycloak login');
-      }
-
-      const { redirectUri: returnedUri } = await performKeycloakLogin(authUrl.toString(), {
-        username,
-        password,
-        totpSecret: env.AEGIS_TEST_TOTP_SECRET,
-        loginTimeoutMs,
-      });
-
-      if (!returnedUri) {
-        throw new Error('Keycloak login did not yield a redirect URI');
-      }
-      const parsedRedirect = new URL(returnedUri);
-      const returnedState = parsedRedirect.searchParams.get('state') ?? '';
-      if (returnedState && returnedState !== state) {
-        throw new Error('Keycloak login returned an unexpected state value');
-      }
-      const code = parsedRedirect.searchParams.get('code');
-      if (!code) {
-        throw new Error('Authorization redirect missing code parameter');
-      }
-
-      const tokenUrl = `${authority}/protocol/openid-connect/token`;
-      const body = new URLSearchParams();
-      body.set('grant_type', 'authorization_code');
-      body.set('code', code);
-      body.set('redirect_uri', redirectUri);
-      body.set('client_id', clientId);
-      body.set('code_verifier', verifier);
-      if (scope) {
-        body.set('scope', scope);
-      }
-
-      const response = await fetch(tokenUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-      });
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(
-          `Keycloak token exchange failed (${response.status} ${response.statusText}): ${text.slice(0, 500)}`
-        );
-      }
+      const preferredScope = buildScope(baseScopes, audience, extraScopes);
+      const baseWithoutOffline = baseScopes.filter((scopeName) => scopeName !== offlineScope);
+      const extrasWithoutOffline = extraScopes.filter((scopeName) => scopeName !== offlineScope);
+      const fallbackScopeCandidate = buildScope(baseWithoutOffline, audience, extrasWithoutOffline).trim();
+      const useFallback = fallbackScopeCandidate.length > 0 && fallbackScopeCandidate !== preferredScope;
+      const scopeAttempts = useFallback ? [preferredScope, fallbackScopeCandidate] : [preferredScope];
 
       type TokenResponse = {
         access_token?: string;
@@ -424,27 +402,126 @@ async function resolveAutomationAuth(env: NodeJS.ProcessEnv, debugLogs: boolean)
         expires_in?: number | string;
       };
 
-      const tokenResponse = (await response.json()) as TokenResponse;
-      const accessToken = tokenResponse.access_token?.trim();
-      if (!accessToken) {
-        throw new Error('Keycloak token exchange did not return access_token');
-      }
-      const idToken = tokenResponse.id_token?.trim();
-      const claims = parseJwtClaims(idToken) ?? parseJwtClaims(accessToken);
-      const derived = deriveAccountInfo(claims, username);
-      const resolvedEmail = env.AEGIS_TEST_EMAIL?.trim() || derived.userHeader || username;
+      const attemptLogin = async (requestedScope: string): Promise<AutomationAuthResult> => {
+        const { verifier, challenge } = createPkcePair();
+        const state = toBase64Url(crypto.randomBytes(18));
 
-      if (debugLogs) {
-        console.log('[prepare-real-workspace] obtained automation token via Keycloak login');
-      }
+        const authUrl = new URL(`${authority}/protocol/openid-connect/auth`);
+        authUrl.searchParams.set('client_id', clientId);
+        authUrl.searchParams.set('redirect_uri', redirectUri);
+        authUrl.searchParams.set('response_type', 'code');
+        if (requestedScope) {
+          authUrl.searchParams.set('scope', requestedScope);
+        }
+        authUrl.searchParams.set('code_challenge', challenge);
+        authUrl.searchParams.set('code_challenge_method', 'S256');
+        authUrl.searchParams.set('state', state);
+        if (prompt) {
+          authUrl.searchParams.set('prompt', prompt);
+        }
+        if (loginHint) {
+          authUrl.searchParams.set('login_hint', loginHint);
+        }
+        if (audienceParam) {
+          authUrl.searchParams.set('audience', audienceParam);
+        }
 
-      return {
-        token: accessToken,
-        email: resolvedEmail,
-        subject: derived.account.id,
-        idToken,
-        refreshToken: tokenResponse.refresh_token?.trim(),
+        if (debugLogs) {
+          console.log('[prepare-real-workspace] acquiring automation token via Keycloak login');
+        }
+
+        const { redirectUri: returnedUri } = await performKeycloakLogin(authUrl.toString(), {
+          username,
+          password,
+          totpSecret: env.AEGIS_TEST_TOTP_SECRET,
+          loginTimeoutMs,
+        });
+
+        if (!returnedUri) {
+          throw new Error('Keycloak login did not yield a redirect URI');
+        }
+        const parsedRedirect = new URL(returnedUri);
+        const returnedState = parsedRedirect.searchParams.get('state') ?? '';
+        if (returnedState && returnedState !== state) {
+          throw new Error('Keycloak login returned an unexpected state value');
+        }
+        const code = parsedRedirect.searchParams.get('code');
+        if (!code) {
+          throw new Error('Authorization redirect missing code parameter');
+        }
+
+        const tokenUrl = `${authority}/protocol/openid-connect/token`;
+        const body = new URLSearchParams();
+        body.set('grant_type', 'authorization_code');
+        body.set('code', code);
+        body.set('redirect_uri', redirectUri);
+        body.set('client_id', clientId);
+        body.set('code_verifier', verifier);
+        if (requestedScope) {
+          body.set('scope', requestedScope);
+        }
+
+        const response = await fetch(tokenUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body,
+        });
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          throw new KeycloakTokenExchangeError(response.status, response.statusText, text);
+        }
+
+        const tokenResponse = (await response.json()) as TokenResponse;
+        const accessToken = tokenResponse.access_token?.trim();
+        if (!accessToken) {
+          throw new Error('Keycloak token exchange did not return access_token');
+        }
+        const idToken = tokenResponse.id_token?.trim();
+        const claims = parseJwtClaims(idToken) ?? parseJwtClaims(accessToken);
+        const derived = deriveAccountInfo(claims, username);
+        const resolvedEmail = env.AEGIS_TEST_EMAIL?.trim() || derived.userHeader || username;
+
+        if (debugLogs) {
+          console.log('[prepare-real-workspace] obtained automation token via Keycloak login');
+        }
+
+        return {
+          token: accessToken,
+          email: resolvedEmail,
+          subject: derived.account.id,
+          idToken,
+          refreshToken: tokenResponse.refresh_token?.trim(),
+        };
       };
+
+      let lastError: unknown;
+      for (let attemptIndex = 0; attemptIndex < scopeAttempts.length; attemptIndex += 1) {
+        const scopeValue = scopeAttempts[attemptIndex];
+        const suppressOffline = attemptIndex > 0;
+        try {
+          const result = await attemptLogin(scopeValue);
+          if (suppressOffline && debugLogs) {
+            console.warn('[prepare-real-workspace] offline_access scope not permitted; proceeding without offline tokens');
+          }
+          return result;
+        } catch (err) {
+          if (
+            attemptIndex === 0 &&
+            scopeAttempts.length > 1 &&
+            err instanceof KeycloakTokenExchangeError &&
+            err.offlineAccessNotAllowed
+          ) {
+            if (debugLogs) {
+              console.warn('[prepare-real-workspace] offline tokens not allowed; retrying without offline_access scope');
+            }
+            lastError = err;
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      throw lastError ?? new Error('Failed to acquire automation access token');
     })().catch((err) => {
       cachedAutomationAuth = undefined;
       throw err;
@@ -1084,7 +1161,7 @@ async function buildOptions(overrides: Partial<PrepareOptions>, cli: CliOverride
   if (!token) {
     const automationAuth = await resolveAutomationAuth(env, debugLogs);
     token = automationAuth.token;
-    resolvedEmail = automationAuth.email;
+    resolvedEmail = normalizeUserIdentifier(automationAuth.email) ?? undefined;
   }
   if (!token) {
     throw new Error('Failed to acquire automation access token for Platform API calls.');
@@ -1207,10 +1284,17 @@ async function buildOptions(overrides: Partial<PrepareOptions>, cli: CliOverride
     env.AEGIS_TEST_EMAIL = resolvedEmail;
   }
 
+  const configuredEmail = normalizeUserIdentifier(
+    overrides.email
+      ?? env.AEGIS_TEST_EMAIL
+      ?? resolvedEmail
+      ?? env.AEGIS_WORKSPACE_EMAIL
+  );
+
   return {
     grpcAddr,
     token,
-    email: overrides.email ?? env.AEGIS_TEST_EMAIL ?? resolvedEmail ?? env.AEGIS_WORKSPACE_EMAIL,
+    email: configuredEmail,
     namespace: overrides.namespace ?? env.AEGIS_PLATFORM_NAMESPACE ?? 'default',
     projectId,
     projectDisplayName: overrides.projectDisplayName ?? env.AEGIS_PROJECT_DISPLAY_NAME,

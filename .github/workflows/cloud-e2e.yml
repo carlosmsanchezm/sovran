@@ -19,6 +19,8 @@ jobs:
     name: Deploy Preview Environment
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      AEGIS_AUTH_DISABLE_OFFLINE: '1'
     outputs:
       preview_id: ${{ steps.ids.outputs.preview_id }}
       preview_namespace: ${{ steps.ids.outputs.preview_namespace }}
@@ -321,6 +323,7 @@ jobs:
       AEGIS_TEST_USERNAME: ${{ secrets.AEGIS_TEST_USERNAME }}
       AEGIS_TEST_PASSWORD: ${{ secrets.AEGIS_TEST_PASSWORD }}
       AEGIS_TEST_TOTP_SECRET: ${{ secrets.AEGIS_TEST_TOTP_SECRET }}
+      AEGIS_AUTH_DISABLE_OFFLINE: '1'
     steps:
       - name: Skip if deploy failed
         if: ${{ needs.deploy-preview.result != 'success' }}
