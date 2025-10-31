@@ -335,12 +335,23 @@ suite('Aegis REAL backend E2E', function () {
       assert.ok(authSession, 'Authentication session was not established');
       assert.ok(authSession.accessToken, 'Authentication session missing access token');
       const accessTokenClaims = decodeJwtClaims(authSession.accessToken);
+      const accountSubject = typeof authSession.account?.id === 'string' ? authSession.account.id.trim() : undefined;
       sessionSubject = typeof accessTokenClaims?.sub === 'string' ? accessTokenClaims.sub : undefined;
+      if (accountSubject) {
+        fingerprint('session-account-id', accountSubject);
+      }
+      if (!sessionSubject && accountSubject) {
+        if (process.env.AEGIS_E2E_DEBUG === '1') {
+          console.warn('[real-e2e] falling back to session account id for subject');
+        }
+        sessionSubject = accountSubject;
+      }
       const derivedUser = authModule.getSessionUser(authSession);
       const normalizedDerivedUser = normalizeUser(derivedUser);
       const sessionEmailClaim = typeof accessTokenClaims?.email === 'string' ? accessTokenClaims.email : undefined;
       const normalizedEmailClaim = normalizeUser(sessionEmailClaim);
 
+      fingerprint('session-subject', sessionSubject);
       if (expectedUserEmail && normalizedDerivedUser) {
         fingerprint('expected-user-email', expectedUserEmail);
         fingerprint('derived-user', normalizedDerivedUser);
