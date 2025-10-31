@@ -1,0 +1,132 @@
+{{- $kc := .Values.keycloak | default dict }}
+{{- $postgres := $kc.postgres | default dict }}
+{{- $crdReady := or (.Capabilities.APIVersions.Has "k8s.keycloak.org/v2alpha1") ($kc.forceRender | default false) }}
+{{- $postgresEnabled := ternary $postgres.enabled true (hasKey $postgres "enabled") }}
+{{- if and ($kc.enabled | default false) $postgresEnabled $crdReady }}
+{{- $ns := include "aegis-services.keycloak.namespace" . }}
+{{- $db := $kc.database | default dict }}
+{{- $dbSecret := $db.secret | default dict }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aegis-services.keycloak.postgresServiceName" . }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "aegis-services.keycloak.postgres.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "aegis-services.keycloak.postgres.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: postgres
+      port: {{ default 5432 $db.port }}
+      targetPort: postgres
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "aegis-services.keycloak.postgresFullname" . }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "aegis-services.keycloak.postgres.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "aegis-services.keycloak.postgresServiceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "aegis-services.keycloak.postgres.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aegis-services.keycloak.postgres.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with $postgres.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $postgres.initChown }}
+      initContainers:
+        - name: init-fs-permissions
+          image: {{ default "registry.access.redhat.com/ubi9/ubi-minimal:9.3" $postgres.initImage }}
+          command:
+            - /bin/sh
+            - -c
+            - chown -R {{ default 999 $postgres.containerSecurityContext.runAsUser | int }}:{{ default 999 $postgres.podSecurityContext.fsGroup | int }} /var/lib/postgresql/data
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+      {{- end }}
+      containers:
+        - name: postgres
+          image: "{{ $postgres.image.repository }}:{{ $postgres.image.tag }}"
+          imagePullPolicy: {{ default "IfNotPresent" $postgres.image.pullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: {{ default 5432 $db.port }}
+              protocol: TCP
+          env:
+            - name: POSTGRES_DB
+              value: {{ default "keycloak" $db.database | quote }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_INITDB_ARGS
+              value: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $dbSecret.name }}
+                  key: {{ default "username" $dbSecret.usernameKey }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $dbSecret.name }}
+                  key: {{ default "password" $dbSecret.passwordKey }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          {{- with $postgres.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $postgres.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ default "5Gi" $postgres.storage.size }}
+        {{- if $postgres.storage.className }}
+        storageClassName: {{ $postgres.storage.className }}
+        {{- end }}
+{{- end }}

@@ -1,0 +1,106 @@
+{{- $kc := .Values.keycloak | default dict }}
+{{- $realm := $kc.realm | default dict }}
+{{- $configMap := $realm.configMap | default dict }}
+{{- $crdReady := or (.Capabilities.APIVersions.Has "k8s.keycloak.org/v2alpha1") ($kc.forceRender | default false) }}
+{{- $realmEnabled := ternary $realm.enabled true (hasKey $realm "enabled") }}
+{{- if and ($kc.enabled | default false) $realmEnabled $crdReady }}
+{{- $ns := include "aegis-services.keycloak.namespace" . }}
+{{- $kcName := include "aegis-services.keycloak.fullname" . }}
+{{- $client := $realm.client | default dict }}
+{{- $clientSecret := $client.secret | default dict }}
+{{- $otp := $realm.otp | default dict }}
+{{- $realmSource := lower (default "inline" $realm.source) }}
+{{- $realmFileCandidate := default $configMap.file $realm.file }}
+{{- $realmFilePath := default "keycloak/aegis-realm.json" $realmFileCandidate }}
+{{- $realmFullPath := printf "files/%s" $realmFilePath }}
+{{- $theme := $kc.theme | default dict }}
+{{- $themeEnabled := ternary ($theme.enabled | default true) true (hasKey $theme "enabled") }}
+{{- $themeName := $theme.name | default "" }}
+{{- $loginTheme := dict "value" $realm.loginTheme }}
+{{- if and (or (not $loginTheme.value) (eq $loginTheme.value "")) $themeEnabled (ne $themeName "") }}
+  {{- $_ := set $loginTheme "value" $themeName }}
+{{- end }}
+{{- $defaultScopesDict := dict "list" ($client.defaultClientScopes | default (list "web-origins" "acr" "profile" "roles" "basic" "email")) }}
+{{- if not (has "offline_access" $defaultScopesDict.list) }}
+  {{- $_ := set $defaultScopesDict "list" (append $defaultScopesDict.list "offline_access") }}
+{{- end }}
+{{- $optionalScopesDict := dict "list" ($client.optionalClientScopes | default (list "address" "phone" "organization" "microprofile-jwt")) }}
+{{- if $optionalScopesDict.list }}
+  {{- $_ := set $optionalScopesDict "list" (without $optionalScopesDict.list "offline_access") }}
+{{- end }}
+{{- $placeholder := default "BACKSTAGE_CLIENT_SECRET" $clientSecret.placeholder }}
+{{- $clientAccessTokenLifespan := printf "%d" (int (default 300 $client.accessTokenLifespan)) }}
+{{- $clientRepresentation := dict
+    "clientId" (default "backstage" $client.id)
+    "name" (default "Backstage" $client.name)
+    "enabled" true
+    "protocol" "openid-connect"
+    "publicClient" false
+    "standardFlowEnabled" true
+    "implicitFlowEnabled" false
+    "directAccessGrantsEnabled" false
+    "serviceAccountsEnabled" false
+    "redirectUris" (default (list) $client.redirectUris)
+    "webOrigins" (default (list) $client.webOrigins)
+    "clientAuthenticatorType" "client-secret"
+    "secret" (printf "${%s}" $placeholder)
+    "attributes" (merge (dict
+      "pkce.code.challenge.method" "S256"
+      "backchannel.logout.session.required" "true"
+      "backchannel.logout.revoke.offline.tokens" "true"
+      "oauth2.device.authorization.grant.enabled" "false"
+      "access.token.lifespan" $clientAccessTokenLifespan
+      "use.refresh.tokens" "true") (default (dict) $client.attributes))
+    "defaultClientScopes" $defaultScopesDict.list
+    "optionalClientScopes" $optionalScopesDict.list
+  }}
+{{- $requiredActions := default (list (dict "alias" "CONFIGURE_TOTP" "name" "Configure OTP" "providerId" "CONFIGURE_TOTP" "enabled" true "defaultAction" true "priority" 10)) $realm.requiredActions }}
+---
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: {{ printf "%s-realm" $kcName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "aegis-services.keycloak.labels" . | nindent 4 }}
+  annotations:
+    aegis.aegis-services.io/client-access-token-lifespan: "{{ $clientAccessTokenLifespan }}"
+spec:
+  keycloakCRName: {{ $kcName }}
+  {{- if and $clientSecret.name (or $clientSecret.value $clientSecret.placeholder) }}
+  placeholders:
+    {{ $placeholder }}:
+      secret:
+        name: {{ $clientSecret.name }}
+        key: {{ default "clientSecret" $clientSecret.key }}
+  {{- end }}
+  realm:
+{{- if eq $realmSource "file" }}
+{{ fromJson (.Files.Get $realmFullPath) | toYaml | nindent 4 }}
+{{- else }}
+    realm: {{ default "aegis" $realm.name }}
+    displayName: {{ default "Aegis" $realm.displayName }}
+    {{- if $loginTheme.value }}
+    loginTheme: {{ $loginTheme.value | quote }}
+    {{- end }}
+    enabled: true
+    sslRequired: {{ default "external" $realm.sslRequired }}
+    loginWithEmailAllowed: true
+    duplicateEmailsAllowed: false
+    registrationAllowed: false
+    rememberMe: false
+    verifyEmail: true
+    accessTokenLifespan: {{ int (default 300 $realm.accessTokenLifespan) }}
+    accessCodeLifespan: {{ int (default 60 $realm.accessCodeLifespan) }}
+    accessCodeLifespanLogin: {{ int (default 60 $realm.accessCodeLifespanLogin) }}
+    accessCodeLifespanUserAction: {{ int (default 300 $realm.accessCodeLifespanUserAction) }}
+    otpPolicyType: {{ default "totp" $otp.type }}
+    otpPolicyAlgorithm: {{ default "HmacSHA1" $otp.algorithm }}
+    otpPolicyDigits: {{ int (default 6 $otp.digits) }}
+    otpPolicyPeriod: {{ int (default 30 $otp.period) }}
+    clients:
+      - {{- toYaml $clientRepresentation | nindent 8 }}
+    requiredActions:
+      {{- toYaml $requiredActions | nindent 6 }}
+{{- end }}
+{{- end }}

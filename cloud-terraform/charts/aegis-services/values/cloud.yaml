@@ -9,6 +9,41 @@ global:
   imagePullSecrets:
     - name: ecr-registry-secret
 
+keycloak:
+  enabled: true
+  createNamespace: false
+  namespace: null
+  forceRender: true
+  http:
+    httpEnabled: false
+  ingress:
+    enabled: false
+  customIngress:
+    enabled: false
+  hostname:
+    hostname: https://keycloak.placeholder.invalid:8443
+    admin: https://keycloak.placeholder.invalid:8443
+    strict: false
+  admin:
+    secret:
+      name: keycloak-admin-secret
+      create: false
+  database:
+    secret:
+      name: keycloak-db-secret
+      create: false
+  postgres:
+    enabled: false
+  realm:
+    client:
+      secret:
+        name: keycloak-backstage-client-secret
+        create: false
+  tls:
+    secret:
+      name: keycloak-tls
+      create: false
+
 platformApi:
   enabled: true
   replicaCount: 1  # Single instance for resource constraints
