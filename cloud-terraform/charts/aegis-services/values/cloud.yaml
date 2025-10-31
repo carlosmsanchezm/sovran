@@ -10,10 +10,10 @@ global:
     - name: ecr-registry-secret
 
 keycloak:
-  enabled: true
+  enabled: false
   createNamespace: false
   namespace: null
-  forceRender: true
+  forceRender: false
   http:
     httpEnabled: false
   ingress:
@@ -21,8 +21,8 @@ keycloak:
   customIngress:
     enabled: false
   hostname:
-    hostname: https://keycloak.placeholder.invalid:8443
-    admin: https://keycloak.placeholder.invalid:8443
+    hostname: https://keycloak.aegis.dev
+    admin: https://keycloak.aegis.dev
     strict: false
   admin:
     secret:
@@ -275,31 +275,3 @@ proxy:
                   values:
                     - proxy
             topologyKey: topology.kubernetes.io/zone
-
-#################################################################
-# Keycloak Configuration - Cloud Preview
-#################################################################
-keycloak:
-  enabled: true
-  replicaCount: 1
-  image: "quay.io/keycloak/keycloak:26.0.5"
-  imagePullPolicy: IfNotPresent
-  adminUser: "admin"
-  adminPassword: "ChangeMe123!"
-  httpPort: 8080
-  servicePort: 8080
-  resources:
-    requests:
-      cpu: "250m"
-      memory: "512Mi"
-    limits:
-      cpu: "1000m"
-      memory: "1Gi"
-
-#################################################################
-# Global Production Settings
-#################################################################
-global:
-  # Use image pull secrets for private registries
-  imagePullSecrets:
-    - name: ecr-registry-secret

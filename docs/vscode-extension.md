@@ -83,7 +83,7 @@ kubectl delete aegisworkload <wid> -n aegis-workloads-local
 
 ## 5. Local and Remote E2E Testing with Keycloak
 
-The real-backend E2E suite (`npm run test:e2e:real`) now exercises Keycloak end‑to‑end in both
+The real-backend E2E suite (`npm run test:e2e:real`) now exercises Keycloak end‑to-end in both
 local and CI environments. A few key behaviours to keep in mind:
 
 - **Local runs** – set the automation credentials and CA path as shown above, then execute
@@ -96,13 +96,18 @@ local and CI environments. A few key behaviours to keep in mind:
   Keycloak to `AEGIS_TEST_EMAIL`, guaranteeing consistent identity checks across the run.
 - **GitHub Actions workflow** – `.github/workflows/cloud-e2e.yml` now exports
   `AEGIS_AUTH_DISABLE_OFFLINE=1` for both the deploy and extension jobs so the automation always
-  requests only the online scopes in CI. The deploy stage also port-forwards the in-cluster Keycloak
-  service to `127.0.0.1:18443` (or `:18080` for HTTP) before seeding the control plane. The extension
-  job uses the same environment variables plus the TLS CA bundle artifact to sign in through
-  Keycloak and run the real E2E flow.
+  requests only the online scopes in CI. Instead of standing up a throwaway instance, the deploy stage
+  resolves the managed Keycloak issuer (`keycloak.aegis.dev`) using the `KEYCLOAK_BASE_URL` and
+  `KEYCLOAK_REALM` secrets, shares the resulting authority with later steps, and skips all port-forward
+  logic. The extension job reuses those outputs alongside the TLS CA bundle artifact to log in through
+  the managed realm and execute the real E2E flow end-to-end.
 - **Debug fingerprints** – when `AEGIS_E2E_DEBUG=1`, the E2E suite emits SHA‑256 fingerprints for
   the expected email, token claims, and session subject. This avoids leaking raw credentials while
   still proving that Keycloak identities line up between the workspace payload and the issued tokens.
+
+The Helm chart bundles the same `aegis-realm.json` import as the upstream Aegis repository so that
+the automation user (`cloud@test.com`) and related roles stay aligned across local clusters and the
+managed preview realm.
 
 When chasing CI failures, download the workflow artifacts (particularly the extension job log) and
 grep for `[real-e2e]` lines to confirm the port-forward, Keycloak login, and proxy ticket steps all

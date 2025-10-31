@@ -52,6 +52,7 @@ resource "aws_route53_record" "proxy" {
 
 # DNS record for Keycloak
 resource "aws_route53_record" "keycloak" {
+  count   = var.manage_keycloak_dns ? 1 : 0
   zone_id = aws_route53_zone.aegis.zone_id
   name    = "keycloak.aegis.dev"
   type    = "CNAME"
