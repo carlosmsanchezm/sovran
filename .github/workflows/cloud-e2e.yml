@@ -188,7 +188,7 @@ jobs:
           AEGIS_TEST_PASSWORD: ${{ secrets.AEGIS_TEST_PASSWORD }}
           AEGIS_TEST_TOTP_SECRET: ${{ secrets.AEGIS_TEST_TOTP_SECRET }}
           AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
-          AEGIS_AUTH_AUTHORITY: ${{ steps.configure.outputs.keycloak_authority != '' && steps.configure.outputs.keycloak_authority || format('{0}/realms/{1}', env.MANAGED_KEYCLOAK_BASE_URL, env.MANAGED_KEYCLOAK_REALM) }}
+          AEGIS_AUTH_AUTHORITY: ${{ steps.configure.outputs.keycloak_authority != '' && steps.configure.outputs.keycloak_authority || format('{0}/realms/{1}', secrets.KEYCLOAK_BASE_URL, secrets.KEYCLOAK_REALM) }}
           AEGIS_AUTH_CLIENT_ID: vscode-extension
           AEGIS_AUTH_REDIRECT_URI: vscode://aegis.aegis-remote/auth
         run: |
@@ -259,7 +259,7 @@ jobs:
       AEGIS_WORKSPACE_SUBMIT_DELAY_MS: '10000'
       AEGIS_WORKSPACE_APPEAR_TIMEOUT_MS: '240000'
       AEGIS_WORKLOAD_NAMESPACE: aegis-workloads
-      AEGIS_AUTH_AUTHORITY: ${{ needs.deploy-preview.outputs.keycloak_authority != '' && needs.deploy-preview.outputs.keycloak_authority || format('{0}/realms/{1}', env.MANAGED_KEYCLOAK_BASE_URL, env.MANAGED_KEYCLOAK_REALM) }}
+      AEGIS_AUTH_AUTHORITY: ${{ needs.deploy-preview.outputs.keycloak_authority != '' && needs.deploy-preview.outputs.keycloak_authority || format('{0}/realms/{1}', secrets.KEYCLOAK_BASE_URL, secrets.KEYCLOAK_REALM) }}
       AEGIS_AUTH_CLIENT_ID: vscode-extension
       AEGIS_AUTH_REDIRECT_URI: vscode://aegis.aegis-remote/auth
       AEGIS_TEST_USERNAME: ${{ secrets.AEGIS_TEST_USERNAME }}
