@@ -101,6 +101,8 @@ local and CI environments. A few key behaviours to keep in mind:
   `KEYCLOAK_REALM` secrets, shares the resulting authority with later steps, and skips all port-forward
   logic. The extension job reuses those outputs alongside the TLS CA bundle artifact to log in through
   the managed realm and execute the real E2E flow end-to-end.
+  CI runs never port-forward a cluster Keycloak service; every token is minted through the managed
+  issuer so the workflow stays independent of preview-cluster Keycloak readiness.
 - **Debug fingerprints** – when `AEGIS_E2E_DEBUG=1`, the E2E suite emits SHA‑256 fingerprints for
   the expected email, token claims, and session subject. This avoids leaking raw credentials while
   still proving that Keycloak identities line up between the workspace payload and the issued tokens.
