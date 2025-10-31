@@ -36,7 +36,7 @@ function normalizeUser(value: string | null | undefined): string | undefined {
 }
 
 function fingerprint(label: string, value: string | undefined) {
-  if (!value) {
+  if (!value || process.env.AEGIS_E2E_DEBUG !== '1') {
     return;
   }
   const hash = createHash('sha256').update(value).digest('hex');
