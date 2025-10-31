@@ -483,7 +483,7 @@ async function resolveAutomationAuth(env: NodeJS.ProcessEnv, debugLogs: boolean)
       const providedEmail = normalizeUserIdentifier(env.AEGIS_TEST_EMAIL);
       const derivedEmail = normalizeUserIdentifier(derived.userHeader);
       const usernameEmail = normalizeUserIdentifier(username);
-      const resolvedEmail = providedEmail ?? derivedEmail ?? usernameEmail;
+      const resolvedEmail = derivedEmail ?? providedEmail ?? usernameEmail;
       if (resolvedEmail) {
         if (providedEmail && providedEmail !== resolvedEmail && debugLogs) {
           console.warn(
