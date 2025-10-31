@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { spawnSync, execFile } from 'child_process';
 import { promisify } from 'util';
+import { createHash } from 'crypto';
 import * as vscode from 'vscode';
 import { performKeycloakLogin } from './lib/keycloak-login';
 
@@ -32,6 +33,14 @@ function normalizeUser(value: string | null | undefined): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed ? trimmed.toLowerCase() : undefined;
+}
+
+function fingerprint(label: string, value: string | undefined) {
+  if (!value) {
+    return;
+  }
+  const hash = createHash('sha256').update(value).digest('hex');
+  console.warn(`[real-e2e] ${label} sha256=${hash} len=${value.length}`);
 }
 
 function runHelperScript(args: string[]): number {
@@ -333,6 +342,8 @@ suite('Aegis REAL backend E2E', function () {
       const normalizedEmailClaim = normalizeUser(sessionEmailClaim);
 
       if (expectedUserEmail && normalizedDerivedUser) {
+        fingerprint('expected-user-email', expectedUserEmail);
+        fingerprint('derived-user', normalizedDerivedUser);
         assert.strictEqual(
           normalizedDerivedUser,
           expectedUserEmail,
@@ -340,6 +351,7 @@ suite('Aegis REAL backend E2E', function () {
         );
       }
       if (expectedUserEmail && normalizedEmailClaim) {
+        fingerprint('token-email-claim', normalizedEmailClaim);
         assert.strictEqual(
           normalizedEmailClaim,
           expectedUserEmail,
@@ -393,6 +405,7 @@ suite('Aegis REAL backend E2E', function () {
           'Proxy ticket subject does not match authenticated session'
         );
         if (expectedUserEmail && normalizedTicketEmail) {
+          fingerprint('ticket-email-claim', normalizedTicketEmail);
           assert.strictEqual(
             normalizedTicketEmail,
             expectedUserEmail,
