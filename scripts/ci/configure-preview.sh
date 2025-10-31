@@ -182,7 +182,7 @@ fi
 log "Updating Route53 records with actual hostnames"
 pushd "${TERRAFORM_DIR}" >/dev/null
 apply_cmd=(
-  terraform apply -auto-approve -lock-timeout=5m \
+  terraform apply -auto-approve \
     -var="platform_api_lb_hostname=${PLATFORM_LB}" \
     -var="proxy_lb_hostname=${PROXY_LB}" \
     -target=aws_route53_record.platform_api_grpc \
