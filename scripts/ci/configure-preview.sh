@@ -17,6 +17,7 @@ CA_BUNDLE="${CA_BUNDLE:-${HOME}/aegis-platform-api-ca.crt}"
 MANAGED_KEYCLOAK_BASE_URL="${MANAGED_KEYCLOAK_BASE_URL:-${KEYCLOAK_BASE_URL:-}}"
 MANAGED_KEYCLOAK_REALM="${MANAGED_KEYCLOAK_REALM:-${KEYCLOAK_REALM:-aegis}}"
 DEFAULT_KEYCLOAK_BASE_URL="${DEFAULT_KEYCLOAK_BASE_URL:-https://keycloak.aegis.dev}"
+MANAGED_KEYCLOAK_DISABLED=0
 
 if [[ ! -d "${TERRAFORM_DIR}" ]]; then
   echo "Terraform directory ${TERRAFORM_DIR} not found" >&2
@@ -120,9 +121,13 @@ PY
   if [[ -z "${managed_host}" ]]; then
     log "Managed Keycloak base URL '${MANAGED_KEYCLOAK_BASE_URL}' is invalid; ignoring and falling back to cluster Keycloak"
     MANAGED_KEYCLOAK_BASE_URL=""
-  elif ! dig +short "${managed_host}" >/dev/null 2>&1; then
-    log "Managed Keycloak host ${managed_host} did not resolve; falling back to cluster Keycloak"
-    MANAGED_KEYCLOAK_BASE_URL=""
+  else
+    dig_result="$(dig +short "${managed_host}" | head -n1 || true)"
+    if [[ -z "${dig_result}" ]]; then
+      log "Managed Keycloak host ${managed_host} did not resolve; falling back to cluster Keycloak"
+      MANAGED_KEYCLOAK_BASE_URL=""
+      MANAGED_KEYCLOAK_DISABLED=1
+    fi
   fi
 fi
 
@@ -157,9 +162,13 @@ if [[ -z "${MANAGED_KEYCLOAK_BASE_URL}" ]]; then
   fi
 
   if [[ -z "${KEYCLOAK_LB}" ]]; then
-    MANAGED_KEYCLOAK_BASE_URL="${DEFAULT_KEYCLOAK_BASE_URL}"
-    MANAGED_KEYCLOAK_REALM="${MANAGED_KEYCLOAK_REALM:-aegis}"
-    log "Keycloak service not detected; defaulting to managed issuer ${MANAGED_KEYCLOAK_BASE_URL}"
+    if [[ "${MANAGED_KEYCLOAK_DISABLED}" -eq 1 ]]; then
+      log "Managed Keycloak unavailable and no cluster Keycloak service detected; keycloak authority will remain unset"
+    else
+      MANAGED_KEYCLOAK_BASE_URL="${DEFAULT_KEYCLOAK_BASE_URL}"
+      MANAGED_KEYCLOAK_REALM="${MANAGED_KEYCLOAK_REALM:-aegis}"
+      log "Keycloak service not detected; defaulting to managed issuer ${MANAGED_KEYCLOAK_BASE_URL}"
+    fi
   fi
 else
   log "Using managed Keycloak endpoint: ${MANAGED_KEYCLOAK_BASE_URL} (realm ${MANAGED_KEYCLOAK_REALM})"
@@ -303,6 +312,10 @@ if [[ -n "${MANAGED_KEYCLOAK_BASE_URL}" && -n "${KEYCLOAK_DNS}" ]]; then
   managed_keycloak_ip="$(pick_reachable_ip "${KEYCLOAK_DNS}" "${KEYCLOAK_PORT}")"
   if [[ -n "${managed_keycloak_ip}" ]]; then
     log "  Managed Keycloak reachable at ${managed_keycloak_ip}:${KEYCLOAK_PORT}"
+  else
+    log "  Managed Keycloak still unreachable; disabling managed Keycloak for this run"
+    MANAGED_KEYCLOAK_BASE_URL=""
+    MANAGED_KEYCLOAK_DISABLED=1
   fi
   KEYCLOAK_IP="${managed_keycloak_ip}"
 elif [[ -n "${KEYCLOAK_LB}" ]]; then
