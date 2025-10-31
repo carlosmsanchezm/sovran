@@ -26,6 +26,14 @@ interface WorkspaceSessionPayload {
   user_token?: string | null;
 }
 
+function normalizeUser(value: string | null | undefined): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed.toLowerCase() : undefined;
+}
+
 function runHelperScript(args: string[]): number {
   const scriptPath = path.resolve(extensionRoot, 'scripts/prepare-real-workspace.ts');
   const execArgs = ['-r', 'ts-node/register', scriptPath, ...args];
@@ -242,6 +250,16 @@ suite('Aegis REAL backend E2E', function () {
     assert.ok(workspaceId, 'AEGIS_WORKSPACE_ID not set');
 
     const cfg = vscode.workspace.getConfiguration('aegisRemote');
+    const disableOfflineFlag = [
+      process.env.AEGIS_AUTH_DISABLE_OFFLINE,
+      process.env.AEGIS_DISABLE_OFFLINE_SCOPE,
+    ]
+      .map((value) => (value ?? '').trim().toLowerCase())
+      .some((value) => value === '1' || value === 'true' || value === 'yes');
+    const scopeConfig = disableOfflineFlag
+      ? ['openid', 'profile', 'email']
+      : ['openid', 'profile', 'email', 'offline_access'];
+    await cfg.update('auth.scopes', scopeConfig, true);
     await cfg.update('platform.grpcEndpoint', grpcAddr, true);
     await cfg.update('platform.namespace', namespace, true);
     if (projectId) {
@@ -267,7 +285,7 @@ suite('Aegis REAL backend E2E', function () {
     }
 
     const originalOpenExternal = vscode.env.openExternal;
-    const expectedUserEmail = sessionPayload?.user_email?.toLowerCase();
+    const expectedUserEmail = normalizeUser(sessionPayload?.user_email);
     let sessionSubject: string | undefined;
 
     try {
@@ -310,18 +328,20 @@ suite('Aegis REAL backend E2E', function () {
       const accessTokenClaims = decodeJwtClaims(authSession.accessToken);
       sessionSubject = typeof accessTokenClaims?.sub === 'string' ? accessTokenClaims.sub : undefined;
       const derivedUser = authModule.getSessionUser(authSession);
+      const normalizedDerivedUser = normalizeUser(derivedUser);
       const sessionEmailClaim = typeof accessTokenClaims?.email === 'string' ? accessTokenClaims.email : undefined;
+      const normalizedEmailClaim = normalizeUser(sessionEmailClaim);
 
-      if (expectedUserEmail && derivedUser) {
+      if (expectedUserEmail && normalizedDerivedUser) {
         assert.strictEqual(
-          derivedUser.toLowerCase(),
+          normalizedDerivedUser,
           expectedUserEmail,
           'Authenticated session user does not match workspace session payload'
         );
       }
-      if (expectedUserEmail && sessionEmailClaim) {
+      if (expectedUserEmail && normalizedEmailClaim) {
         assert.strictEqual(
-          sessionEmailClaim.toLowerCase(),
+          normalizedEmailClaim,
           expectedUserEmail,
           'Authenticated session email claim does not match workspace session payload'
         );
@@ -364,6 +384,7 @@ suite('Aegis REAL backend E2E', function () {
         const ticketClaims = decodeJwtClaims(ticket.jwt);
         const ticketSubject = typeof ticketClaims?.sub === 'string' ? ticketClaims.sub : undefined;
         const ticketEmailClaim = typeof ticketClaims?.email === 'string' ? ticketClaims.email : undefined;
+        const normalizedTicketEmail = normalizeUser(ticketEmailClaim);
         assert.ok(ticketSubject, 'Proxy ticket missing subject claim');
         assert.ok(sessionSubject, 'Authenticated session missing subject claim');
         assert.strictEqual(
@@ -371,9 +392,9 @@ suite('Aegis REAL backend E2E', function () {
           sessionSubject,
           'Proxy ticket subject does not match authenticated session'
         );
-        if (expectedUserEmail && ticketEmailClaim) {
+        if (expectedUserEmail && normalizedTicketEmail) {
           assert.strictEqual(
-            ticketEmailClaim.toLowerCase(),
+            normalizedTicketEmail,
             expectedUserEmail,
             'Proxy ticket email claim does not match workspace session payload'
           );

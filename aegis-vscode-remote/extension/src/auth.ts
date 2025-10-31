@@ -87,7 +87,17 @@ async function automationSessionFromEnv(): Promise<vscode.AuthenticationSession 
   if (audience) {
     body.set('audience', audience);
   }
-  const scope = ['openid', 'profile', 'email', 'offline_access'].join(' ');
+  const disableOffline = [
+    process.env.AEGIS_AUTH_DISABLE_OFFLINE,
+    process.env.AEGIS_DISABLE_OFFLINE_SCOPE,
+  ]
+    .map((value) => (value ?? '').trim().toLowerCase())
+    .some((value) => value === '1' || value === 'true' || value === 'yes');
+  const scopeParts = ['openid', 'profile', 'email'];
+  if (!disableOffline) {
+    scopeParts.push('offline_access');
+  }
+  const scope = scopeParts.join(' ');
   body.set('scope', scope);
 
   const tokenUrl = `${authority}/protocol/openid-connect/token`;
@@ -178,20 +188,27 @@ function parseJwt(token: string | undefined): Record<string, unknown> | undefine
   }
 }
 
+function normalizeClaim(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 function deriveAccountInfo(claims: Record<string, unknown> | undefined, fallbackSubject?: string) {
   const subject =
-    (typeof claims?.sub === 'string' && claims.sub) ||
-    fallbackSubject ||
+    normalizeClaim(claims?.sub) ||
+    normalizeClaim(fallbackSubject) ||
     'aegis-user';
-  const label =
-    (typeof claims?.email === 'string' && claims.email) ||
-    (typeof claims?.preferred_username === 'string' && claims.preferred_username) ||
-    (typeof claims?.name === 'string' && claims.name) ||
-    subject;
-  const userHeader =
-    (typeof claims?.email === 'string' && claims.email) ||
-    (typeof claims?.preferred_username === 'string' && claims.preferred_username) ||
-    subject;
+  const email = normalizeClaim(claims?.email);
+  const preferredUsername = normalizeClaim(claims?.preferred_username);
+  const friendlyName = normalizeClaim(claims?.name);
+  const label = email || preferredUsername || friendlyName || subject;
+  const userHeader = email || preferredUsername || subject;
   return { account: { id: subject, label }, userHeader };
 }
 
