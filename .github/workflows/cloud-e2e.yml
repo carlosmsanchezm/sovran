@@ -85,7 +85,7 @@ jobs:
           set -euo pipefail
           TF_WS="${{ steps.ids.outputs.preview_id }}"
           terraform workspace select "${TF_WS}"
-          terraform apply -auto-approve -input=false
+          terraform apply -auto-approve -input=false -lock-timeout=5m
           terraform state pull > terraform.tfstate
           echo "TF_CLI_ARGS_output=-state=$(pwd)/terraform.tfstate" >> "$GITHUB_ENV"
 
@@ -455,7 +455,7 @@ jobs:
           TF_WS="${PREVIEW_ID}"
           if terraform workspace list | grep -q "$TF_WS"; then
             terraform workspace select "$TF_WS"
-            terraform destroy -auto-approve -input=false || echo "Terraform destroy failed; manual cleanup may be required"
+            terraform destroy -auto-approve -input=false -lock-timeout=5m || echo "Terraform destroy failed; manual cleanup may be required"
             terraform workspace select default
             terraform workspace delete "$TF_WS" || true
           else
