@@ -72,11 +72,7 @@ jobs:
           terraform workspace list
           TF_ENV="${{ steps.ids.outputs.preview_release }}"
           echo "TF_VAR_environment=${TF_ENV}" >> "$GITHUB_ENV"
-          if terraform workspace list | grep -q "^  ${TF_WS}$"; then
-            terraform workspace select "${TF_WS}"
-          else
-            terraform workspace new "${TF_WS}"
-          fi
+          terraform workspace new "${TF_WS}" >/dev/null 2>&1 || terraform workspace select "${TF_WS}"
           terraform workspace select "${TF_WS}"
           echo "Using Terraform workspace: ${TF_WS} (environment ${TF_ENV})"
       - name: Terraform apply infrastructure
