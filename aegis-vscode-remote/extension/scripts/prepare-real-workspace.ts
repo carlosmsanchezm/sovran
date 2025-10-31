@@ -471,27 +471,40 @@ async function resolveAutomationAuth(env: NodeJS.ProcessEnv, debugLogs: boolean)
           throw new KeycloakTokenExchangeError(response.status, response.statusText, text);
         }
 
-        const tokenResponse = (await response.json()) as TokenResponse;
-        const accessToken = tokenResponse.access_token?.trim();
-        if (!accessToken) {
-          throw new Error('Keycloak token exchange did not return access_token');
-        }
-        const idToken = tokenResponse.id_token?.trim();
-        const claims = parseJwtClaims(idToken) ?? parseJwtClaims(accessToken);
-        const derived = deriveAccountInfo(claims, username);
-        const resolvedEmail = env.AEGIS_TEST_EMAIL?.trim() || derived.userHeader || username;
+      const tokenResponse = (await response.json()) as TokenResponse;
+      const accessToken = tokenResponse.access_token?.trim();
+      if (!accessToken) {
+        throw new Error('Keycloak token exchange did not return access_token');
+      }
+      const idToken = tokenResponse.id_token?.trim();
+      const claims = parseJwtClaims(idToken) ?? parseJwtClaims(accessToken);
+      const derived = deriveAccountInfo(claims, username);
 
-        if (debugLogs) {
-          console.log('[prepare-real-workspace] obtained automation token via Keycloak login');
+      const providedEmail = normalizeUserIdentifier(env.AEGIS_TEST_EMAIL);
+      const derivedEmail = normalizeUserIdentifier(derived.userHeader);
+      const usernameEmail = normalizeUserIdentifier(username);
+      const resolvedEmail = providedEmail ?? derivedEmail ?? usernameEmail;
+      if (resolvedEmail) {
+        if (providedEmail && providedEmail !== resolvedEmail && debugLogs) {
+          console.warn(
+            '[prepare-real-workspace] overriding provided AEGIS_TEST_EMAIL with derived identity',
+            `(prev:${providedEmail} -> new:${resolvedEmail})`
+          );
         }
+        env.AEGIS_TEST_EMAIL = resolvedEmail;
+      }
 
-        return {
-          token: accessToken,
-          email: resolvedEmail,
-          subject: derived.account.id,
-          idToken,
-          refreshToken: tokenResponse.refresh_token?.trim(),
-        };
+      if (debugLogs) {
+        console.log('[prepare-real-workspace] obtained automation token via Keycloak login');
+      }
+
+      return {
+        token: accessToken,
+        email: resolvedEmail ?? providedEmail ?? derived.userHeader ?? username,
+        subject: derived.account.id,
+        idToken,
+        refreshToken: tokenResponse.refresh_token?.trim(),
+      };
       };
 
       let lastError: unknown;
@@ -1161,7 +1174,7 @@ async function buildOptions(overrides: Partial<PrepareOptions>, cli: CliOverride
   if (!token) {
     const automationAuth = await resolveAutomationAuth(env, debugLogs);
     token = automationAuth.token;
-    resolvedEmail = normalizeUserIdentifier(automationAuth.email) ?? undefined;
+    resolvedEmail = normalizeUserIdentifier(automationAuth.email) ?? normalizeUserIdentifier(env.AEGIS_TEST_EMAIL);
   }
   if (!token) {
     throw new Error('Failed to acquire automation access token for Platform API calls.');
@@ -1286,8 +1299,8 @@ async function buildOptions(overrides: Partial<PrepareOptions>, cli: CliOverride
 
   const configuredEmail = normalizeUserIdentifier(
     overrides.email
-      ?? env.AEGIS_TEST_EMAIL
       ?? resolvedEmail
+      ?? env.AEGIS_TEST_EMAIL
       ?? env.AEGIS_WORKSPACE_EMAIL
   );
 
