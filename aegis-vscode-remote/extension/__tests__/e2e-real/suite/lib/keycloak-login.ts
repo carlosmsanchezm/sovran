@@ -1,3 +1,5 @@
+import { authenticator } from 'otplib';
+
 type LoginResult = {
   redirectUri: string;
 };
@@ -108,6 +110,20 @@ function buildFormData(inputs: Record<string, string>, overrides: Record<string,
   return data;
 }
 
+function generateTotpCode(rawSecret: string): string {
+  const normalized = rawSecret.replace(/\s+/g, '').trim();
+  if (!normalized) {
+    throw new Error('TOTP secret is empty after trimming.');
+  }
+  try {
+    const token = authenticator.generate(normalized);
+    return token.padStart(6, '0');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to generate TOTP code: ${message}`);
+  }
+}
+
 export async function performKeycloakLogin(authUrl: string, opts: LoginOptions): Promise<LoginResult> {
   const {
     username,
@@ -139,6 +155,28 @@ export async function performKeycloakLogin(authUrl: string, opts: LoginOptions):
     body: loginData.toString(),
   }, jar);
 
+  const submitTotpChallenge = async (html: string, sourceUrl: string): Promise<Response> => {
+    if (!totpSecret) {
+      throw new Error('Keycloak is prompting for TOTP, but AEGIS_TEST_TOTP_SECRET is not set.');
+    }
+    const { actionUrl: totpActionUrl, inputs: totpInputs } = parseForm(html, sourceUrl);
+    const fieldName = 'otp' in totpInputs ? 'otp' : 'totp' in totpInputs ? 'totp' : undefined;
+    if (!fieldName) {
+      throw new Error('Unable to identify TOTP input field on Keycloak challenge page.');
+    }
+    const otp = generateTotpCode(totpSecret);
+    const totpData = buildFormData(totpInputs, { [fieldName]: otp });
+    return fetchWithCookies(totpActionUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: totpData.toString(),
+    }, jar);
+  };
+
+  let totpAttempts = 0;
+
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (Date.now() > deadline) {
       throw new Error('Timed out waiting for Keycloak to issue redirect.');
@@ -157,7 +195,12 @@ export async function performKeycloakLogin(authUrl: string, opts: LoginOptions):
       if (response.status === 200) {
         body = await response.text();
         if (/name=["']otp["']/.test(body) || /name=["']totp["']/.test(body)) {
-          throw new Error('Keycloak is prompting for TOTP, but this environment is not configured with AEGIS_TEST_TOTP_SECRET.');
+          if (totpAttempts >= 3) {
+            throw new Error('Exceeded maximum attempts submitting Keycloak TOTP challenge.');
+          }
+          totpAttempts += 1;
+          response = await submitTotpChallenge(body, response.url ?? absolute);
+          continue;
         }
         if (/id=["']kc-form-login["']/.test(body)) {
           throw new Error('Keycloak login failed. Verify username/password credentials.');
@@ -169,10 +212,12 @@ export async function performKeycloakLogin(authUrl: string, opts: LoginOptions):
     if (response.status === 200) {
       body = await response.text();
       if (/name=["']otp["']/.test(body) || /name=["']totp["']/.test(body)) {
-        if (!totpSecret) {
-          throw new Error('Keycloak is prompting for TOTP, but AEGIS_TEST_TOTP_SECRET is not set.');
+        if (totpAttempts >= 3) {
+          throw new Error('Exceeded maximum attempts submitting Keycloak TOTP challenge.');
         }
-        throw new Error('Keycloak TOTP flow is not supported in this automation path.');
+        totpAttempts += 1;
+        response = await submitTotpChallenge(body, response.url ?? authUrl);
+        continue;
       }
       if (/window\.location\.href\s*=\s*"(vscode:[^"]+)"/.test(body)) {
         const redirect = body.match(/window\.location\.href\s*=\s*"(vscode:[^"]+)"/);

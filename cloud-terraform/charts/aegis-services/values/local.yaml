@@ -156,3 +156,93 @@ proxy:
     periodSeconds: 15
     timeoutSeconds: 5
     failureThreshold: 5
+
+keycloak:
+  enabled: true
+  forceRender: true
+  createNamespace: false
+  operator: {}
+  http:
+    httpEnabled: false
+  admin:
+    secret:
+      create: true
+      name: keycloak-admin-secret
+      username: admin
+      password: ""
+  database:
+    secret:
+      create: true
+      name: keycloak-db-secret
+      username: keycloak
+      password: ""
+  realm:
+    enabled: true
+    name: aegis
+    displayName: Aegis
+    client:
+      id: backstage
+      name: Backstage
+      redirectUris:
+        - http://localhost:7008/*
+        - https://backstage.localtest.me/*
+      webOrigins:
+        - http://localhost:3000
+        - https://backstage.localtest.me
+      secret:
+        create: true
+        name: keycloak-backstage-client-secret
+        value: local-backstage-client-secret
+        placeholder: BACKSTAGE_CLIENT_SECRET
+    requiredActions:
+      - alias: CONFIGURE_TOTP
+        name: Configure OTP
+        providerId: CONFIGURE_TOTP
+        defaultAction: true
+        enabled: true
+  tls:
+    secret:
+      create: true
+      name: keycloak-tls
+      cert: |
+        -----BEGIN CERTIFICATE-----
+        MIIDTjCCAjagAwIBAgIJAO7PYN9VNKhEMA0GCSqGSIb3DQEBCwUAMB4xHDAaBgNV
+        BAMME0FlZ2lzIExvY2FsIFJvb3QgQ0EwHhcNMjUxMDI3MjI1NTE1WhcNMjgwMTMw
+        MjI1NTE1WjAgMR4wHAYDVQQDDBVrZXljbG9hay5sb2NhbHRlc3QubWUwggEiMA0G
+        CSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDH5BruSvmyhcF1VMe+IlYok1UqgQER
+        OXhKJZ3K65OslhKsGbfsGc6aL8vEZmkkf4G1Zu/Eb1NJ44tYNY+eFePLXkbvB5Wz
+        R/sfhxKeTOQ0QMIS4LkSYsoCf0sougKQ1g99j5oaU09K7USkSMVC5H1/5wB4kjKJ
+        Vx9SzqHUCSKtHT4IB3ed+pFA1VKM7BA6gWuk355SoY7Si09h7mZrQPS4+PnDFCvB
+        GwiziZnef7bqeWzjKEI52Gi/gnQCz5ghTrTvslrlT7Qj81ZnrqtRuwfmgfcqk1FO
+        Ec/gPI25KbjPbSZXTD4GPWO/FP+87Ie6B1b2jp7uMbiZCwwUfvxGCP2PAgMBAAGj
+        gYwwgYkwVAYDVR0RBE0wS4IVa2V5Y2xvYWsubG9jYWx0ZXN0Lm1lgjJhZWdpcy1z
+        ZXJ2aWNlcy1rZXljbG9hay5rZXljbG9hay5zdmMuY2x1c3Rlci5sb2NhbDAOBgNV
+        HQ8BAf8EBAMCBaAwEwYDVR0lBAwwCgYIKwYBBQUHAwEwDAYDVR0TAQH/BAIwADAN
+        BgkqhkiG9w0BAQsFAAOCAQEAipOLIMIRqwnBXTeSZLGf1rpX5nQZ89ErdESdsQZu
+        WvE3TCpmwp/r6olW1+WHhj6pZJurIWxUQR6sxmvD8gHYd1pbV82czEwdXPe3JzwC
+        Knfd/mfiG7zJ27K25xdWy4gwvG9Vj3VGgXtNVCF6sPxBReX0sb5AYSU4z1aLGF+2
+        vgKGLDrRKWGGjAGp1ITmU6DQnTdU5M/GJiqIgeb06QUFZf2MOMcmglqaUcW+gi2a
+        /pPzVr214M81vRvfjKESBFGLTW5OglEAOGFvnfby0uaPyUv7+jlSTYblFg/i62Nx
+        rbvGzZfvh6CDjYLYO9F9vM9aB4HQwiWs0sEsBljJ0sWclw==
+        -----END CERTIFICATE-----
+        -----BEGIN CERTIFICATE-----
+        MIIDIjCCAgqgAwIBAgIJAOdlWF4QK7cdMA0GCSqGSIb3DQEBCwUAMB4xHDAaBgNV
+        BAMME0FlZ2lzIExvY2FsIFJvb3QgQ0EwHhcNMjUxMDI3MjI1NTEwWhcNMzAxMDI2
+        MjI1NTEwWjAeMRwwGgYDVQQDDBNBZWdpcyBMb2NhbCBSb290IENBMIIBIjANBgkq
+        hkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArrYo0p4zwNNZQd7OFeRKZGGtDePhAleu
+        AUBaxstOyy9eJyCOge38xdHnL730+0Imm69sXubek/Np+L3M8wpoQK3NrJU9XL+3
+        A51Pt5gJrZqjzCVU8+bvEj7nHAJwoLDMXcaVtzVR0spc9fp61tbQLiszzoQ6egXJ
+        cculV2njeIN8iaoAgr3Fxzmjra9aaR4IFVq8UwEGztW3mqNvkSVOx6G2nzBBX7eT
+        deJcK3mcvGd6xp3AW0VthF9t1QjvX2BNIrFZraegT9K2sfR+l9bW9LZ1wCjQFuJR
+        CmAS/geYS7hCKHisa/YXFGL0kNSzcpAjHrfZzrgwOeFsrZVLPAudoQIDAQABo2Mw
+        YTAdBgNVHQ4EFgQUTs43RzMxzkN3MLSdEdo3l7xITx8wHwYDVR0jBBgwFoAUTs43
+        RzMxzkN3MLSdEdo3l7xITx8wDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMC
+        AYYwDQYJKoZIhvcNAQELBQADggEBAHo96vpGI7os8pYqe/lM7uBSFc40a9SbjFj8
+        M20Zgm1/UL6w3lJsfnQzDmDDtdO7J4kQR8TVuEkbMw039D1yu7Z5P4u7tefxZHwf
+        AkEUFZI0lc8D+iApYQen+VppI9GZcAStVu2MqhAhNyVZK37CHDSlgGxwwL6NsV9g
+        DE+t1TnpH6wbqXU1+FpSVHzKPWgyjq+XMF8EDTSmh5+qBETfHSaX5EGOk1c+6SdR
+        qvbpoMnc963JWRVjqqelLbsU8562E8FE3YJrUJnEBmSl1POv19c/Ev1rPX6HmBzt
+        M8TjWIYeV7NSWQFM4GaONGw5pAOAT2s9BSY5lAZ5gYgbOKSzl7Y=
+        -----END CERTIFICATE-----
+      key: |
+        -----REDACTED-PRIVATE-KEY-----

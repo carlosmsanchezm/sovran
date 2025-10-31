@@ -58,8 +58,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "aegis-services.keycloak.namespace" -}}
-{{- if .Values.keycloak.namespace -}}
-{{- .Values.keycloak.namespace -}}
+{{- $kc := .Values.keycloak | default dict }}
+{{- if $kc.namespace -}}
+{{- $kc.namespace -}}
 {{- else -}}
 {{- .Release.Namespace -}}
 {{- end -}}

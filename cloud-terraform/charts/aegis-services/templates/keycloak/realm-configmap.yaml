@@ -1,0 +1,29 @@
+{{- $kc := .Values.keycloak | default dict }}
+{{- $realm := $kc.realm | default dict }}
+{{- $configMap := $realm.configMap | default dict }}
+{{- $crdReady := or (.Capabilities.APIVersions.Has "k8s.keycloak.org/v2alpha1") ($kc.forceRender | default false) }}
+{{- $realmEnabled := ternary $realm.enabled true (hasKey $realm "enabled") }}
+{{- $configEnabled := ternary ($configMap.enabled | default true) true (hasKey $configMap "enabled") }}
+{{- if and ($kc.enabled | default false) $realmEnabled $configEnabled $crdReady }}
+{{- $ns := include "aegis-services.keycloak.namespace" . }}
+{{- $name := default (printf "%s-realm" (include "aegis-services.keycloak.fullname" .)) $configMap.name }}
+{{- $filePath := default "keycloak/aegis-realm.json" $configMap.file }}
+{{- $fullPath := printf "files/%s" $filePath }}
+{{- $key := default "aegis-realm.json" $configMap.key }}
+{{- $fileContents := .Files.Get $fullPath }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "aegis-services.keycloak.labels" . | nindent 4 }}
+  {{- with $configMap.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  {{ $key }}: |
+{{ $fileContents | nindent 4 }}
+{{- end }}

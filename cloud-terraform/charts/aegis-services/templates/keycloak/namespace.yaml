@@ -1,0 +1,12 @@
+{{- $kc := .Values.keycloak | default dict }}
+{{- $crdReady := or (.Capabilities.APIVersions.Has "k8s.keycloak.org/v2alpha1") ($kc.forceRender | default false) }}
+{{- $createNamespace := ternary $kc.createNamespace true (hasKey $kc "createNamespace") }}
+{{- if and ($kc.enabled | default false) $createNamespace $crdReady }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "aegis-services.keycloak.namespace" . }}
+  labels:
+    {{- include "aegis-services.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keycloak
+{{- end }}
