@@ -16,6 +16,7 @@ CA_BUNDLE="${CA_BUNDLE:-${HOME}/aegis-platform-api-ca.crt}"
 
 MANAGED_KEYCLOAK_BASE_URL="${MANAGED_KEYCLOAK_BASE_URL:-${KEYCLOAK_BASE_URL:-}}"
 MANAGED_KEYCLOAK_REALM="${MANAGED_KEYCLOAK_REALM:-${KEYCLOAK_REALM:-aegis}}"
+DEFAULT_KEYCLOAK_BASE_URL="${DEFAULT_KEYCLOAK_BASE_URL:-https://keycloak.aegis.dev}"
 
 if [[ ! -d "${TERRAFORM_DIR}" ]]; then
   echo "Terraform directory ${TERRAFORM_DIR} not found" >&2
@@ -128,6 +129,12 @@ if [[ -z "${MANAGED_KEYCLOAK_BASE_URL}" ]]; then
     KEYCLOAK_SCHEME="https"
   else
     KEYCLOAK_SCHEME="http"
+  fi
+
+  if [[ -z "${KEYCLOAK_LB}" ]]; then
+    MANAGED_KEYCLOAK_BASE_URL="${DEFAULT_KEYCLOAK_BASE_URL}"
+    MANAGED_KEYCLOAK_REALM="${MANAGED_KEYCLOAK_REALM:-aegis}"
+    log "Keycloak service not detected; defaulting to managed issuer ${MANAGED_KEYCLOAK_BASE_URL}"
   fi
 else
   log "Using managed Keycloak endpoint: ${MANAGED_KEYCLOAK_BASE_URL} (realm ${MANAGED_KEYCLOAK_REALM})"
