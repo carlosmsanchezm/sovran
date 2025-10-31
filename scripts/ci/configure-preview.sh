@@ -101,6 +101,31 @@ wait_for_lb() {
 }
 
 log "Waiting for preview LoadBalancers..."
+
+if [[ -n "${MANAGED_KEYCLOAK_BASE_URL}" ]]; then
+  managed_host=$(python3 - <<'PY' "${MANAGED_KEYCLOAK_BASE_URL}"
+import sys
+from urllib.parse import urlparse
+
+base = sys.argv[1].strip()
+if not base:
+    print("")
+    sys.exit(0)
+if not base.startswith(("http://", "https://")):
+    base = "https://" + base
+parsed = urlparse(base)
+print((parsed.hostname or "").strip())
+PY
+)
+  if [[ -z "${managed_host}" ]]; then
+    log "Managed Keycloak base URL '${MANAGED_KEYCLOAK_BASE_URL}' is invalid; ignoring and falling back to cluster Keycloak"
+    MANAGED_KEYCLOAK_BASE_URL=""
+  elif ! dig +short "${managed_host}" >/dev/null 2>&1; then
+    log "Managed Keycloak host ${managed_host} did not resolve; falling back to cluster Keycloak"
+    MANAGED_KEYCLOAK_BASE_URL=""
+  fi
+fi
+
 PLATFORM_LB="$(wait_for_lb "${HELM_RELEASE}-platform-api" "${K8S_NAMESPACE}")"
 PROXY_LB="$(wait_for_lb "${HELM_RELEASE}-proxy" "${K8S_NAMESPACE}")"
 
