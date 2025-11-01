@@ -1,0 +1,38 @@
+{{- $kc := .Values.keycloak | default dict }}
+{{- $theme := $kc.theme | default dict }}
+{{- $crdReady := or (.Capabilities.APIVersions.Has "k8s.keycloak.org/v2alpha1") ($kc.forceRender | default false) }}
+{{- $themeEnabled := ternary ($theme.enabled | default true) true (hasKey $theme "enabled") }}
+{{- if and ($kc.enabled | default false) $themeEnabled $crdReady }}
+{{- $ns := include "aegis-services.keycloak.namespace" . }}
+{{- $configMap := $theme.configMap | default dict }}
+{{- $configName := default (printf "%s-theme" (include "aegis-services.keycloak.fullname" .)) $configMap.name }}
+{{- $files := $theme.files | default list }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $configName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "aegis-services.keycloak.labels" . | nindent 4 }}
+  {{- with $configMap.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  {{- if not $files }}
+  theme.properties: |
+    parent=keycloak
+    import=common/keycloak
+  {{- else }}
+  {{- range $file := $files }}
+  {{- $key := required (printf "keycloak.theme.files[].key is required (missing for %v)" $file) $file.key }}
+  {{- $path := required (printf "keycloak.theme.files[].path is required for key %s" $key) $file.path }}
+  {{- $source := required (printf "keycloak.theme.files[].file is required for key %s" $key) $file.file }}
+  {{- $srcPath := printf "files/%s" $source }}
+  {{- $content := required (printf "keycloak theme file %s not found at %s" $key $srcPath) ($.Files.Get $srcPath) }}
+  {{ $key }}: |
+{{ $content | indent 4 }}
+  {{- end }}
+  {{- end }}
+{{- end }}

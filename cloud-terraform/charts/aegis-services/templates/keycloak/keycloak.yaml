@@ -1,0 +1,203 @@
+{{- $kc := .Values.keycloak | default dict }}
+{{- $crdReady := or (.Capabilities.APIVersions.Has "k8s.keycloak.org/v2alpha1") ($kc.forceRender | default false) }}
+{{- if and ($kc.enabled | default false) $crdReady }}
+{{- $ns := include "aegis-services.keycloak.namespace" . }}
+{{- $adminCfg := $kc.admin | default dict }}
+{{- $admin := $adminCfg.secret | default dict }}
+{{- $db := $kc.database | default dict }}
+{{- $dbSecret := $db.secret | default dict }}
+{{- $http := $kc.http | default dict }}
+{{- $hostname := $kc.hostname | default dict }}
+{{- $ingress := $kc.ingress | default dict }}
+{{- $networkPolicy := $kc.networkPolicy | default dict }}
+{{- $features := $kc.features | default dict }}
+{{- $resources := $kc.resources | default dict }}
+{{- $additional := $kc.additionalOptions | default list }}
+{{- $image := $kc.image | default "registry.redhat.io/rhbk/keycloak-rhel9:26.2-11" }}
+{{- $imagePullSecrets := $kc.imagePullSecrets | default list }}
+{{- $realm := $kc.realm | default dict }}
+{{- $realmConfig := $realm.configMap | default dict }}
+{{- $realmConfigEnabled := ternary ($realmConfig.enabled | default true) true (hasKey $realmConfig "enabled") }}
+{{- $realmConfigName := default (printf "%s-realm" (include "aegis-services.keycloak.fullname" .)) $realmConfig.name }}
+{{- $realmConfigVolumeName := default "realm-config" $realmConfig.volumeName }}
+{{- $realmConfigMountPath := default "/opt/keycloak/data/import" $realmConfig.mountPath }}
+{{- $realmConfigReadOnly := default true $realmConfig.readOnly }}
+{{- $realmConfigSubPath := $realmConfig.subPath | default "" }}
+{{- $theme := $kc.theme | default dict }}
+{{- $themeEnabled := ternary ($theme.enabled | default true) true (hasKey $theme "enabled") }}
+{{- $themeName := $theme.name | default "" }}
+{{- $themeConfig := $theme.configMap | default dict }}
+{{- $themeConfigName := default (printf "%s-theme" (include "aegis-services.keycloak.fullname" .)) $themeConfig.name }}
+{{- $themeVolumeName := default "keycloak-theme" $themeConfig.volumeName }}
+{{- $themeMountPath := default (ternary (printf "/opt/keycloak/themes/%s" $themeName) "/opt/keycloak/themes/custom" (ne $themeName "")) $themeConfig.mountPath }}
+{{- $themeReadOnly := default true $themeConfig.readOnly }}
+{{- $themeDefaultMode := $themeConfig.defaultMode }}
+{{- $themeFiles := $theme.files | default list }}
+{{- $tls := $kc.tls | default dict }}
+{{- $tlsSecret := $tls.secret | default dict }}
+{{- $tlsSecretName := ($tlsSecret.name | default "") }}
+---
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: {{ include "aegis-services.keycloak.fullname" . }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "aegis-services.keycloak.labels" . | nindent 4 }}
+spec:
+  instances: {{ default 1 $kc.instances }}
+  {{- if and $admin.name (not $kc.bootstrapAdminDisabled) }}
+  bootstrapAdmin:
+    user:
+      secret: {{ $admin.name }}
+  {{- end }}
+  image: {{ $image }}
+  {{- if $imagePullSecrets }}
+  imagePullSecrets:
+    {{- range $imagePullSecrets }}
+    - name: {{ .name }}
+    {{- end }}
+  {{- end }}
+  {{- if $additional }}
+  additionalOptions:
+    {{- toYaml $additional | nindent 4 }}
+  {{- end }}
+  {{- if hasKey $kc "startOptimized" }}
+  startOptimized: {{ $kc.startOptimized }}
+  {{- end }}
+  db:
+    vendor: {{ default "postgres" $db.vendor }}
+    host: {{ default (printf "%s.%s.svc.cluster.local" (include "aegis-services.keycloak.postgresServiceName" .) $ns) $db.host | quote }}
+    port: {{ default 5432 $db.port }}
+    database: {{ default "keycloak" $db.database | quote }}
+    usernameSecret:
+      name: {{ $dbSecret.name }}
+      key: {{ default "username" $dbSecret.usernameKey }}
+    passwordSecret:
+      name: {{ $dbSecret.name }}
+      key: {{ default "password" $dbSecret.passwordKey }}
+  hostname:
+    {{- if $hostname.hostname }}
+    hostname: {{ $hostname.hostname }}
+    {{- end }}
+    {{- if $hostname.admin }}
+    admin: {{ $hostname.admin }}
+    {{- end }}
+    {{- if hasKey $hostname "strict" }}
+    strict: {{ $hostname.strict }}
+    {{- end }}
+    {{- if hasKey $hostname "backchannelDynamic" }}
+    backchannelDynamic: {{ $hostname.backchannelDynamic }}
+    {{- end }}
+  http:
+    httpEnabled: {{ default false $http.httpEnabled }}
+    httpsPort: {{ default 8443 $http.httpsPort }}
+    {{- if $tlsSecretName }}
+    tlsSecret: {{ $tlsSecretName }}
+    {{- end }}
+    {{- with $http.annotations }}
+    annotations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with $http.labels }}
+    labels:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- if $kc.podDisruptionBudget }}
+  podDisruptionBudget:
+    {{- toYaml $kc.podDisruptionBudget | nindent 4 }}
+  {{- end }}
+  {{- if or $features.enabled $features.disabled }}
+  features:
+    {{- with $features.enabled }}
+    enabled:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with $features.disabled }}
+    disabled:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  ingress:
+    enabled: {{ default true $ingress.enabled }}
+    className: {{ $ingress.className | default "ingress-nginx" }}
+    {{- with $ingress.annotations }}
+    annotations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with $ingress.labels }}
+    labels:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+  networkPolicy:
+    enabled: {{ default true $networkPolicy.enabled }}
+    {{- with $networkPolicy.http }}
+    http:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- with $resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- $staticVolumes := dict "list" (list) }}
+  {{- $staticMounts := dict "list" (list) }}
+  {{- if and $realmConfigEnabled $realmConfigName }}
+    {{- $realmVolume := dict "name" $realmConfigVolumeName }}
+    {{- $realmConfigRef := dict "name" $realmConfigName }}
+    {{- with $realmConfig.items }}
+      {{- $_ := set $realmConfigRef "items" . }}
+    {{- end }}
+    {{- with $realmConfig.defaultMode }}
+      {{- $_ := set $realmConfigRef "defaultMode" . }}
+    {{- end }}
+    {{- $_ := set $realmVolume "configMap" $realmConfigRef }}
+    {{- $_ := set $staticVolumes "list" (append ($staticVolumes.list) $realmVolume) }}
+    {{- $realmMount := dict "name" $realmConfigVolumeName "mountPath" $realmConfigMountPath "readOnly" $realmConfigReadOnly }}
+    {{- if $realmConfigSubPath }}
+      {{- $_ := set $realmMount "subPath" $realmConfigSubPath }}
+    {{- end }}
+    {{- $_ := set $staticMounts "list" (append ($staticMounts.list) $realmMount) }}
+  {{- end }}
+  {{- if and $themeEnabled (or $themeName $themeConfigName) }}
+    {{- $themeVolume := dict "name" $themeVolumeName }}
+    {{- $themeConfigRef := dict "name" $themeConfigName }}
+    {{- with $themeDefaultMode }}
+      {{- $_ := set $themeConfigRef "defaultMode" . }}
+    {{- end }}
+    {{- $themeItemDict := dict "list" (list) }}
+    {{- range $file := $themeFiles }}
+      {{- $key := required "keycloak.theme.files[].key is required" $file.key }}
+      {{- $path := required (printf "keycloak.theme.files[].path is required for key %s" $key) $file.path }}
+      {{- $_ := set $themeItemDict "list" (append ($themeItemDict.list) (dict "key" $key "path" $path)) }}
+    {{- end }}
+    {{- if $themeItemDict.list }}
+      {{- $_ := set $themeConfigRef "items" $themeItemDict.list }}
+    {{- end }}
+    {{- $_ := set $themeVolume "configMap" $themeConfigRef }}
+    {{- $_ := set $staticVolumes "list" (append ($staticVolumes.list) $themeVolume) }}
+    {{- $themeMount := dict "name" $themeVolumeName "mountPath" $themeMountPath "readOnly" $themeReadOnly }}
+    {{- $_ := set $staticMounts "list" (append ($staticMounts.list) $themeMount) }}
+  {{- end }}
+  {{- $allVolumes := dict "list" (list) }}
+  {{- range $vol := ($kc.additionalVolumes | default (list)) }}
+    {{- $_ := set $allVolumes "list" (append ($allVolumes.list) $vol) }}
+  {{- end }}
+  {{- range $vol := ($staticVolumes.list | default (list)) }}
+    {{- $_ := set $allVolumes "list" (append ($allVolumes.list) $vol) }}
+  {{- end }}
+  {{- if $allVolumes.list }}
+  additionalVolumes:
+    {{- toYaml $allVolumes.list | nindent 4 }}
+  {{- end }}
+  {{- $allMounts := dict "list" (list) }}
+  {{- range $mount := ($kc.additionalVolumeMounts | default (list)) }}
+    {{- $_ := set $allMounts "list" (append ($allMounts.list) $mount) }}
+  {{- end }}
+  {{- range $mount := ($staticMounts.list | default (list)) }}
+    {{- $_ := set $allMounts "list" (append ($allMounts.list) $mount) }}
+  {{- end }}
+  {{- if $allMounts.list }}
+  additionalVolumeMounts:
+    {{- toYaml $allMounts.list | nindent 4 }}
+  {{- end }}
+{{- end }}
