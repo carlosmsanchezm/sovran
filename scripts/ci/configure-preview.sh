@@ -120,9 +120,14 @@ PY
   if [[ -z "${managed_host}" ]]; then
     log "Managed Keycloak base URL '${MANAGED_KEYCLOAK_BASE_URL}' is invalid; ignoring and falling back to cluster Keycloak"
     MANAGED_KEYCLOAK_BASE_URL=""
-  elif ! dig +short "${managed_host}" >/dev/null 2>&1; then
-    log "Managed Keycloak host ${managed_host} did not resolve; falling back to cluster Keycloak"
-    MANAGED_KEYCLOAK_BASE_URL=""
+  else
+    mapfile -t managed_records < <(dig +short "${managed_host}" 2>/dev/null | sed '/^$/d')
+    if [[ "${#managed_records[@]}" -eq 0 ]]; then
+      log "Managed Keycloak host ${managed_host} did not resolve to any records; falling back to cluster Keycloak"
+      MANAGED_KEYCLOAK_BASE_URL=""
+    else
+      log "Managed Keycloak host ${managed_host} resolved via DNS (${managed_records[*]})"
+    fi
   fi
 fi
 
