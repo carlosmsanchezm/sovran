@@ -1,0 +1,43 @@
+{{- $kc := .Values.keycloak | default dict }}
+{{- $custom := $kc.customIngress | default dict }}
+{{- $tls := $kc.tls | default dict }}
+{{- $tlsSecret := $tls.secret | default dict }}
+{{- if and ($kc.enabled | default false) ($custom.enabled | default false) }}
+{{- $ns := include "aegis-services.keycloak.namespace" . }}
+{{- $hostnameRaw := (dig "hostname" "hostname" "" $kc) }}
+{{- $hostNoScheme := regexReplaceAll "^https?://" $hostnameRaw "" }}
+{{- $host := regexReplaceAll "/$" $hostNoScheme "" }}
+{{- if $host }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "aegis-services.keycloak.fullname" . }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "aegis-services.keycloak.labels" . | nindent 4 }}
+  {{- with $custom.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $custom.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  tls:
+    - hosts:
+        - {{ $host }}
+      secretName: {{ $tlsSecret.name | default "keycloak-tls" }}
+  rules:
+    - host: {{ $host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "aegis-services.keycloak.fullname" . }}-service
+                port:
+                  number: 8443
+{{- end }}
+{{- end }}

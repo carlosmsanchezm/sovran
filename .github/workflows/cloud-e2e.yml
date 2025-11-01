@@ -1,10 +1,6 @@
 name: Extension Cloud TLS E2E
 
 on:
-  push:
-    branches:
-      - feature/ci-tests
-  pull_request:
   workflow_dispatch:
 
 env:
@@ -19,6 +15,11 @@ jobs:
     name: Deploy Preview Environment
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      # Force managed Keycloak in CI; prevents any cluster-local fallback
+      MANAGED_KEYCLOAK_BASE_URL: ${{ secrets.KEYCLOAK_BASE_URL }}
+      MANAGED_KEYCLOAK_REALM: ${{ secrets.KEYCLOAK_REALM }}
+      AEGIS_AUTH_DISABLE_OFFLINE: '1'
     outputs:
       preview_id: ${{ steps.ids.outputs.preview_id }}
       preview_namespace: ${{ steps.ids.outputs.preview_namespace }}
@@ -31,6 +32,9 @@ jobs:
       proxy_ip: ${{ steps.configure.outputs.proxy_ip }}
       keycloak_hostname: ${{ steps.configure.outputs.keycloak_hostname }}
       keycloak_ip: ${{ steps.configure.outputs.keycloak_ip }}
+      keycloak_port: ${{ steps.configure.outputs.keycloak_port }}
+      keycloak_scheme: ${{ steps.configure.outputs.keycloak_scheme }}
+      keycloak_authority: ${{ steps.configure.outputs.keycloak_authority }}
     steps:
       - name: Checkout extension repository
         uses: actions/checkout@v4
@@ -67,11 +71,7 @@ jobs:
           terraform workspace list
           TF_ENV="${{ steps.ids.outputs.preview_release }}"
           echo "TF_VAR_environment=${TF_ENV}" >> "$GITHUB_ENV"
-          if terraform workspace list | grep -q "^  ${TF_WS}$"; then
-            terraform workspace select "${TF_WS}"
-          else
-            terraform workspace new "${TF_WS}"
-          fi
+          terraform workspace new "${TF_WS}" >/dev/null 2>&1 || terraform workspace select "${TF_WS}"
           terraform workspace select "${TF_WS}"
           echo "Using Terraform workspace: ${TF_WS} (environment ${TF_ENV})"
       - name: Terraform apply infrastructure
@@ -108,6 +108,15 @@ jobs:
             | sudo tar -xz -C /usr/local/bin grpcurl
           sudo chmod +x /usr/local/bin/grpcurl
           grpcurl --version
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
 
       - name: Configure preview endpoints
         id: configure
@@ -160,7 +169,7 @@ jobs:
           name: tls-ca-bundle
           path: ${{ steps.configure.outputs.grpc_ca }}
 
-      - name: Seed platform control plane
+      - name: Seed platform control plane (managed Keycloak only)
         env:
           GRPC_ADDR: ${{ steps.configure.outputs.grpc_addr }}
           GRPC_HOST: ${{ steps.configure.outputs.grpc_host }}
@@ -168,33 +177,49 @@ jobs:
           PLATFORM_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
           PROJECT_ID: ${{ format('p-cloud-e2e-il1-{0}', github.run_id) }}
           CLUSTER_ID: ${{ format('aegis-spoke-{0}', steps.ids.outputs.preview_release) }}
-          TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
-          TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
+          HELM_RELEASE: ${{ steps.ids.outputs.preview_release }}
+          K8S_NAMESPACE: ${{ steps.ids.outputs.preview_namespace }}
+          AEGIS_TEST_USERNAME: ${{ secrets.AEGIS_TEST_USERNAME }}
+          AEGIS_TEST_PASSWORD: ${{ secrets.AEGIS_TEST_PASSWORD }}
+          AEGIS_TEST_TOTP_SECRET: ${{ secrets.AEGIS_TEST_TOTP_SECRET }}
+          AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
+          AEGIS_AUTH_AUTHORITY: ${{ steps.configure.outputs.keycloak_authority != '' && steps.configure.outputs.keycloak_authority || format('{0}/realms/{1}', secrets.KEYCLOAK_BASE_URL, secrets.KEYCLOAK_REALM) }}
+          AEGIS_AUTH_CLIENT_ID: vscode-extension
+          AEGIS_AUTH_REDIRECT_URI: vscode://aegis.aegis-remote/auth
         run: |
           set -euo pipefail
           HOST="${GRPC_ADDR}"
           CACERT="${GRPC_CA}"
-          AUTH="authorization: Bearer ${TEST_TOKEN}"
-          USER_HDR="x-aegis-user: ${TEST_EMAIL}"
+          : "${AEGIS_AUTH_AUTHORITY:?AEGIS_AUTH_AUTHORITY must be set}"
+          echo "[seed] Using managed Keycloak authority: ${AEGIS_AUTH_AUTHORITY}"
+          TOKEN_PAYLOAD=$(npx ts-node aegis-vscode-remote/extension/scripts/prepare-real-workspace.ts --mode token)
+          ACCESS_TOKEN=$(echo "${TOKEN_PAYLOAD}" | jq -r '.accessToken // empty')
+          if [ -z "${ACCESS_TOKEN}" ]; then
+            echo "Failed to acquire automation access token" >&2
+            echo "Payload:" >&2
+            echo "${TOKEN_PAYLOAD}" >&2
+            exit 1
+          fi
+          AUTH="authorization: Bearer ${ACCESS_TOKEN}"
           NS_HDR="x-aegis-namespace: ${PLATFORM_NAMESPACE}"
 
-          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$NS_HDR" \
             -d '{"project":{"id":"'"${PROJECT_ID}"'","displayName":"Cloud E2E","ownerGroup":"aegis-dev","policy":{"regions":["us-east-1"],"dataLevel":"il1","denyEgressByDefault":false}}}' \
             "${HOST}" aegis.v1.AegisPlatform/CreateProject || true
 
-          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$NS_HDR" \
             -d '{"flavor":{"name":"cpu-small"}}' \
             "${HOST}" aegis.v1.AegisPlatform/UpsertFlavor || true
 
-          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$NS_HDR" \
             -d '{"queue":{"name":"default","projectId":"'"${PROJECT_ID}"'","priorityTier":"dev","allowedFlavors":["cpu-small"],"defaultMaxDurationSeconds":3600}}' \
             "${HOST}" aegis.v1.AegisPlatform/UpsertQueue || true
 
-          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$NS_HDR" \
             -d '{"clusterId":"'"${CLUSTER_ID}"'","provider":"aws","region":"us-east-1","ilLevel":"il1","labels":{"env":"cloud-e2e"}}' \
             "${HOST}" aegis.v1.AegisPlatform/RegisterCluster || true
 
-          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$USER_HDR" -H "$NS_HDR" \
+          grpcurl -cacert "${CACERT}" -authority "${GRPC_HOST}" -H "$AUTH" -H "$NS_HDR" \
             -d '{"clusterId":"'"${CLUSTER_ID}"'","availableFlavors":[{"name":"cpu-small"}]}' \
             "${HOST}" aegis.v1.AegisPlatform/Heartbeat || true
 
@@ -224,18 +249,18 @@ jobs:
       AEGIS_PROJECT_ID: ${{ format('p-cloud-e2e-il1-{0}', github.run_id) }}
       AEGIS_TEST_CLUSTER_ID: ${{ format('aegis-spoke-{0}', needs.deploy-preview.outputs.preview_release) }}
       AEGIS_TEST_EMAIL: ${{ secrets.AEGIS_TEST_EMAIL }}
-      AEGIS_TEST_TOKEN: ${{ secrets.AEGIS_TEST_TOKEN }}
       AEGIS_E2E_DEBUG: '1'
       AEGIS_WORKSPACE_SUBMIT_ATTEMPTS: '12'
       AEGIS_WORKSPACE_SUBMIT_DELAY_MS: '10000'
       AEGIS_WORKSPACE_APPEAR_TIMEOUT_MS: '240000'
       AEGIS_WORKLOAD_NAMESPACE: aegis-workloads
-      AEGIS_AUTH_AUTHORITY: ${{ format('https://{0}/realms/aegis', needs.deploy-preview.outputs.keycloak_hostname) }}
+      AEGIS_AUTH_AUTHORITY: ${{ needs.deploy-preview.outputs.keycloak_authority != '' && needs.deploy-preview.outputs.keycloak_authority || format('{0}/realms/{1}', secrets.KEYCLOAK_BASE_URL, secrets.KEYCLOAK_REALM) }}
       AEGIS_AUTH_CLIENT_ID: vscode-extension
       AEGIS_AUTH_REDIRECT_URI: vscode://aegis.aegis-remote/auth
       AEGIS_TEST_USERNAME: ${{ secrets.AEGIS_TEST_USERNAME }}
       AEGIS_TEST_PASSWORD: ${{ secrets.AEGIS_TEST_PASSWORD }}
       AEGIS_TEST_TOTP_SECRET: ${{ secrets.AEGIS_TEST_TOTP_SECRET }}
+      AEGIS_AUTH_DISABLE_OFFLINE: '1'
     steps:
       - name: Skip if deploy failed
         if: ${{ needs.deploy-preview.result != 'success' }}

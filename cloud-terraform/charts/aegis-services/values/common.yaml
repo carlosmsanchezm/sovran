@@ -80,6 +80,152 @@ platformApi:
     seccompProfile:
       type: RuntimeDefault
 
+# Keycloak (automation-only) configuration
+keycloak:
+  enabled: false
+  createNamespace: false
+  namespace: keycloak
+  instances: 1
+  forceRender: false
+  operator:
+    install: true
+    image: "registry.redhat.io/rhbk/keycloak-rhel9-operator:26.2-11"
+    keycloakImage: "registry.redhat.io/rhbk/keycloak-rhel9:26.2-11"
+    imagePullPolicy: IfNotPresent
+    annotations: {}
+    imagePullSecrets: []
+    resources:
+      limits:
+        cpu: 700m
+        memory: 450Mi
+      requests:
+        cpu: 300m
+        memory: 450Mi
+  image: "registry.redhat.io/rhbk/keycloak-rhel9:26.2-11"
+  imagePullSecrets: []
+  admin:
+    secret:
+      name: keycloak-admin-secret
+      create: false
+      usernameKey: username
+      passwordKey: password
+      username: admin
+      password: ""
+  database:
+    vendor: postgres
+    host: ""
+    port: 5432
+    database: keycloak
+    secret:
+      name: keycloak-db-secret
+      create: false
+      usernameKey: username
+      passwordKey: password
+      username: keycloak
+      password: ""
+  postgres:
+    enabled: true
+    initChown: true
+    initImage: registry.access.redhat.com/ubi9/ubi-minimal:9.3
+    image:
+      repository: docker.io/postgres
+      tag: "16"
+      pullPolicy: Always
+    storage:
+      size: 5Gi
+      className: ""
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 999
+      fsGroup: 999
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      runAsNonRoot: true
+      runAsUser: 999
+      readOnlyRootFilesystem: false
+      capabilities:
+        drop:
+          - ALL
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+  tls:
+    secret:
+      name: keycloak-tls
+      create: false
+      cert: ""
+      key: ""
+  http:
+    httpEnabled: false
+    httpsPort: 8443
+  hostname:
+    hostname: ""
+    admin: ""
+    strict: false
+    backchannelDynamic: false
+  ingress:
+    enabled: false
+    className: "ingress-nginx"
+    annotations: {}
+    labels: {}
+  customIngress:
+    enabled: false
+    annotations: {}
+    labels: {}
+    tls: []
+    hosts: []
+  networkPolicy:
+    enabled: true
+    http: {}
+  features: {}
+  resources: {}
+  additionalOptions: []
+  additionalVolumes: []
+  additionalVolumeMounts: []
+  startOptimized: true
+  realm:
+    enabled: false
+    name: ""
+    displayName: ""
+    configMap:
+      enabled: true
+      name: ""
+      items: []
+      defaultMode: null
+      volumeName: "realm-config"
+      mountPath: "/opt/keycloak/data/import"
+      subPath: ""
+      readOnly: true
+    client:
+      id: ""
+      name: ""
+      redirectUris: []
+      webOrigins: []
+      secret:
+        name: keycloak-client-secret
+        create: false
+        key: clientSecret
+        value: ""
+        placeholder: CLIENT_SECRET
+    requiredActions: []
+  theme:
+    enabled: false
+    name: ""
+    configMap:
+      name: ""
+      volumeName: keycloak-theme
+      mountPath: ""
+      readOnly: true
+      defaultMode: null
+    files: []
+  databaseMigration:
+    enabled: false
+  podDisruptionBudget: {}
+
 # Proxy Configuration
 proxy:
   image:

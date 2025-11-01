@@ -42,9 +42,9 @@ remote environment is in use.
   (`e2e-junit`).
 - **VS Code Real Backend E2E** (`.github/workflows/e2e-real.yml`): Manual `workflow_dispatch` that
   targets a live workspace. Supply the Platform gRPC address, namespace, project (optional), and the
-  workspace ID; the workflow grabs credentials from `AEGIS_TEST_EMAIL`/`AEGIS_TEST_TOKEN` secrets,
-  provisions an optional CA bundle, and runs `npm run test:e2e:real` to confirm the extension can
-  negotiate with the actual control plane.
+  workspace ID; the workflow grabs credentials from `AEGIS_TEST_USERNAME`/`AEGIS_TEST_PASSWORD`
+  (with optional `AEGIS_TEST_TOTP_SECRET`) secrets, provisions an optional CA bundle, and runs
+  `npm run test:e2e:real` to confirm the extension can negotiate with the actual control plane.
 - **Extension Cloud TLS E2E** (`.github/workflows/cloud-e2e.yml`): End-to-end smoke for TLS
   environments. It stands up a short-lived preview cluster via Terraform/Helm, publishes the CA
   bundle, then reuses the real-backend E2E harness against that environment.
@@ -181,7 +181,7 @@ the correct commit without a manual download.
 
    Launch `Cmd+Shift+P → Aegis: Sign In`. A browser window opens to Keycloak; after completing login
    (and MFA, if configured) you are redirected back to VS Code via `vscode://aegis.aegis-remote/auth`.
-   The extension stores the issued access/refresh tokens and derives the `x-aegis-user` header from
+  The extension stores the issued access/refresh tokens and derives the authenticated user identity from
    token claims automatically.
 
    > **Note:** Register the Keycloak client as public, enable Authorization Code + PKCE, and allow

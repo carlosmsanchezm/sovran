@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { spawnSync, execFile } from 'child_process';
 import { promisify } from 'util';
+import { createHash } from 'crypto';
 import * as vscode from 'vscode';
 import { performKeycloakLogin } from './lib/keycloak-login';
 
@@ -24,6 +25,22 @@ interface WorkspaceSessionPayload {
     grpc_addr?: string | null;
   };
   user_token?: string | null;
+}
+
+function normalizeUser(value: string | null | undefined): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed.toLowerCase() : undefined;
+}
+
+function fingerprint(label: string, value: string | undefined) {
+  if (!value || process.env.AEGIS_E2E_DEBUG !== '1') {
+    return;
+  }
+  const hash = createHash('sha256').update(value).digest('hex');
+  console.warn(`[real-e2e] ${label} sha256=${hash} len=${value.length}`);
 }
 
 function runHelperScript(args: string[]): number {
@@ -66,6 +83,24 @@ function cleanupWorkspaceOnce(session: WorkspaceSessionPayload): void {
 interface WorkloadSummary {
   id?: string | null;
   status?: string | null;
+}
+
+function decodeJwtClaims(token: string | undefined): Record<string, unknown> | undefined {
+  if (!token) {
+    return undefined;
+  }
+  const parts = token.split('.');
+  if (parts.length < 2) {
+    return undefined;
+  }
+  const payload = parts[1];
+  const padded = payload.padEnd(payload.length + ((4 - (payload.length % 4)) % 4), '=');
+  try {
+    const decoded = Buffer.from(padded.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+    return JSON.parse(decoded.toString('utf8')) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
 }
 
 const execFileAsync = promisify(execFile);
@@ -129,9 +164,6 @@ suite('Aegis REAL backend E2E', function () {
     }
     if (sessionPayload.user_email) {
       process.env.AEGIS_TEST_EMAIL = sessionPayload.user_email;
-    }
-    if (sessionPayload.user_token) {
-      process.env.AEGIS_TEST_TOKEN = sessionPayload.user_token;
     }
 
     if (sessionPayload.ca_file && sessionPayload.ca_file.trim().length > 0) {
@@ -227,6 +259,16 @@ suite('Aegis REAL backend E2E', function () {
     assert.ok(workspaceId, 'AEGIS_WORKSPACE_ID not set');
 
     const cfg = vscode.workspace.getConfiguration('aegisRemote');
+    const disableOfflineFlag = [
+      process.env.AEGIS_AUTH_DISABLE_OFFLINE,
+      process.env.AEGIS_DISABLE_OFFLINE_SCOPE,
+    ]
+      .map((value) => (value ?? '').trim().toLowerCase())
+      .some((value) => value === '1' || value === 'true' || value === 'yes');
+    const scopeConfig = disableOfflineFlag
+      ? ['openid', 'profile', 'email']
+      : ['openid', 'profile', 'email', 'offline_access'];
+    await cfg.update('auth.scopes', scopeConfig, true);
     await cfg.update('platform.grpcEndpoint', grpcAddr, true);
     await cfg.update('platform.namespace', namespace, true);
     if (projectId) {
@@ -252,69 +294,84 @@ suite('Aegis REAL backend E2E', function () {
     }
 
     const originalOpenExternal = vscode.env.openExternal;
-    const getSessionDescriptor = Object.getOwnPropertyDescriptor(vscode.authentication, 'getSession');
-    const originalGetSession = (getSessionDescriptor?.value as typeof vscode.authentication.getSession | undefined)?.bind(vscode.authentication);
-    const stubSession: vscode.AuthenticationSession = {
-      id: 'aegis-e2e-session',
-      accessToken: process.env.AEGIS_TEST_TOKEN ?? '',
-      account: {
-        id: process.env.AEGIS_TEST_EMAIL ?? 'aegis-user',
-        label: process.env.AEGIS_TEST_EMAIL ?? 'aegis-user',
-      },
-      scopes: ['platform'],
-    };
-
-    console.log('[real-e2e] overriding authentication.getSession for automation');
-    Object.defineProperty(vscode.authentication, 'getSession', {
-      configurable: true,
-      value: async (...args: Parameters<typeof vscode.authentication.getSession>) => {
-        console.log('[real-e2e] authentication.getSession stub invoked with', args[0], args[1]);
-        if (!stubSession.accessToken) {
-          throw new Error('AEGIS_TEST_TOKEN not set for authentication session stub');
-        }
-        return stubSession;
-      },
-    });
-
-    if (!stubSession.accessToken) {
-      throw new Error('AEGIS_TEST_TOKEN not set for authentication session stub');
-    }
+    const expectedUserEmail = normalizeUser(sessionPayload?.user_email);
+    let sessionSubject: string | undefined;
 
     try {
-    const extension = vscode.extensions.getExtension('aegis.aegis-remote');
-    assert.ok(extension, 'extension not found');
-    if (!extension!.isActive) {
-      await extension!.activate();
-    }
-
-    const outDir = path.resolve(__dirname, '../../../out');
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const platform = require(path.join(outDir, 'platform.js'));
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const connectionModule = require(path.join(outDir, 'connection.js'));
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const authModule = require(path.join(outDir, 'auth.js'));
-
-    (vscode.env.openExternal as any) = async (uri: vscode.Uri) => {
-      const url = uri.toString();
-      if (uri.scheme === 'https' && url.includes('keycloak')) {
-        const username = process.env.AEGIS_TEST_USERNAME ?? '';
-        const password = process.env.AEGIS_TEST_PASSWORD ?? '';
-        if (!username || !password) {
-          throw new Error('AEGIS_TEST_USERNAME and AEGIS_TEST_PASSWORD must be set for Keycloak login');
-        }
-        const loginResult = await performKeycloakLogin(url, {
-          username,
-          password,
-          totpSecret: process.env.AEGIS_TEST_TOTP_SECRET,
-        });
-        await authModule.handleAuthUri(vscode.Uri.parse(loginResult.redirectUri));
-        return true;
+      const extension = vscode.extensions.getExtension('aegis.aegis-remote');
+      assert.ok(extension, 'extension not found');
+      if (!extension!.isActive) {
+        await extension!.activate();
       }
-      return originalOpenExternal.call(vscode.env, uri);
-    };
 
-    await authModule.requireSession(true);
+      const outDir = path.resolve(__dirname, '../../../out');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const platform = require(path.join(outDir, 'platform.js'));
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const connectionModule = require(path.join(outDir, 'connection.js'));
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const authModule = require(path.join(outDir, 'auth.js'));
+
+      (vscode.env.openExternal as any) = async (uri: vscode.Uri) => {
+        const url = uri.toString();
+        if (uri.scheme === 'https' && url.includes('keycloak')) {
+          const loginUsername = process.env.AEGIS_TEST_USERNAME ?? '';
+          const loginPassword = process.env.AEGIS_TEST_PASSWORD ?? '';
+          if (!loginUsername || !loginPassword) {
+            throw new Error('AEGIS_TEST_USERNAME and AEGIS_TEST_PASSWORD must be set for Keycloak login');
+          }
+          const loginResult = await performKeycloakLogin(url, {
+            username: loginUsername,
+            password: loginPassword,
+            totpSecret: process.env.AEGIS_TEST_TOTP_SECRET,
+          });
+          await authModule.handleAuthUri(vscode.Uri.parse(loginResult.redirectUri));
+          return true;
+        }
+        return originalOpenExternal.call(vscode.env, uri);
+      };
+
+      const authSession = await authModule.requireSession(true);
+      assert.ok(authSession, 'Authentication session was not established');
+      assert.ok(authSession.accessToken, 'Authentication session missing access token');
+      const accessTokenClaims = decodeJwtClaims(authSession.accessToken);
+      const accountSubject = typeof authSession.account?.id === 'string' ? authSession.account.id.trim() : undefined;
+      sessionSubject = typeof accessTokenClaims?.sub === 'string' ? accessTokenClaims.sub : undefined;
+      if (accountSubject) {
+        fingerprint('session-account-id', accountSubject);
+      }
+      if (!sessionSubject && accountSubject) {
+        if (process.env.AEGIS_E2E_DEBUG === '1') {
+          console.warn('[real-e2e] falling back to session account id for subject');
+        }
+        sessionSubject = accountSubject;
+      }
+      const derivedUser = authModule.getSessionUser(authSession);
+      const normalizedDerivedUser = normalizeUser(derivedUser);
+      const sessionEmailClaim = typeof accessTokenClaims?.email === 'string' ? accessTokenClaims.email : undefined;
+      const normalizedEmailClaim = normalizeUser(sessionEmailClaim);
+
+      fingerprint('session-subject', sessionSubject);
+      if (expectedUserEmail && normalizedDerivedUser) {
+        fingerprint('expected-user-email', expectedUserEmail);
+        fingerprint('derived-user', normalizedDerivedUser);
+        assert.strictEqual(
+          normalizedDerivedUser,
+          expectedUserEmail,
+          'Authenticated session user does not match workspace session payload'
+        );
+      }
+      if (expectedUserEmail && normalizedEmailClaim) {
+        fingerprint('token-email-claim', normalizedEmailClaim);
+        assert.strictEqual(
+          normalizedEmailClaim,
+          expectedUserEmail,
+          'Authenticated session email claim does not match workspace session payload'
+        );
+      }
+
+      assert.ok(sessionSubject, 'Authenticated session access token is missing a subject claim');
+
       const availableWorkspaces = await platform.listWorkspaces();
       assert.ok(Array.isArray(availableWorkspaces), 'listWorkspaces did not return an array');
       const listedWorkspace = availableWorkspaces.find((ws: { id?: string }) => ws?.id === workspaceId);
@@ -345,6 +402,26 @@ suite('Aegis REAL backend E2E', function () {
             hasKey: Boolean((ticket as any)?.keyPem),
             serverName: (ticket as any)?.serverName ?? null,
           });
+        }
+
+        const ticketClaims = decodeJwtClaims(ticket.jwt);
+        const ticketSubject = typeof ticketClaims?.sub === 'string' ? ticketClaims.sub : undefined;
+        const ticketEmailClaim = typeof ticketClaims?.email === 'string' ? ticketClaims.email : undefined;
+        const normalizedTicketEmail = normalizeUser(ticketEmailClaim);
+        assert.ok(ticketSubject, 'Proxy ticket missing subject claim');
+        assert.ok(sessionSubject, 'Authenticated session missing subject claim');
+        assert.strictEqual(
+          ticketSubject,
+          sessionSubject,
+          'Proxy ticket subject does not match authenticated session'
+        );
+        if (expectedUserEmail && normalizedTicketEmail) {
+          fingerprint('ticket-email-claim', normalizedTicketEmail);
+          assert.strictEqual(
+            normalizedTicketEmail,
+            expectedUserEmail,
+            'Proxy ticket email claim does not match workspace session payload'
+          );
         }
 
           const url = buildWebSocketUrl(ticket.proxyUrl, workspaceId);
@@ -431,12 +508,6 @@ suite('Aegis REAL backend E2E', function () {
       }
     } finally {
       (vscode.env.openExternal as any) = originalOpenExternal;
-      if (originalGetSession) {
-        Object.defineProperty(vscode.authentication, 'getSession', {
-          configurable: true,
-          value: originalGetSession,
-        });
-      }
     }
   });
 });

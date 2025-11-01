@@ -1,4 +1,5 @@
 import { describe, expect, jest, test, beforeEach, afterEach } from '@jest/globals';
+import { promises as fs } from 'fs';
 import type { ExtensionContext } from 'vscode';
 
 function createTestContext(): ExtensionContext {
@@ -27,10 +28,11 @@ function createJwt(payload: Record<string, unknown>) {
 
 describe('auth module (OAuth)', () => {
   const SECRET_KEY = 'aegis.auth.session.v1';
-  let ctx: ExtensionContext;
-  let auth: typeof import('../../auth');
-  let vscode: typeof import('vscode');
-  let fetchMock: jest.MockedFunction<typeof globalThis.fetch>;
+let ctx: ExtensionContext;
+let auth: typeof import('../../auth');
+let vscode: typeof import('vscode');
+let fetchMock: jest.MockedFunction<typeof globalThis.fetch>;
+let readFileSpy: jest.SpiedFunction<typeof fs.readFile>;
 
   async function loadModules() {
     jest.resetModules();
@@ -43,10 +45,14 @@ describe('auth module (OAuth)', () => {
     fetchMock = jest.fn() as jest.MockedFunction<typeof globalThis.fetch>;
     (globalThis as any).fetch = fetchMock;
     await loadModules();
+    readFileSpy = jest.spyOn(fs, 'readFile');
+    const enoent = Object.assign(new Error('not found'), { code: 'ENOENT' });
+    readFileSpy.mockRejectedValue(enoent);
   });
 
   afterEach(() => {
     jest.clearAllMocks();
+    readFileSpy.mockRestore();
   });
 
   test('initializeAuth registers provider exactly once', async () => {
@@ -174,29 +180,103 @@ describe('auth module (OAuth)', () => {
     expect(await ctx.secrets.get(SECRET_KEY)).toBeUndefined();
   });
 
-  test('requireSession uses environment override when provided', async () => {
-    const originalToken = process.env.AEGIS_TEST_TOKEN;
-    const originalEmail = process.env.AEGIS_TEST_EMAIL;
-    try {
-      process.env.AEGIS_TEST_TOKEN = 'env-token';
-      process.env.AEGIS_TEST_EMAIL = 'env@example.com';
+  test('requireSession delegates to VS Code authentication API', async () => {
+    const mockSession = {
+      id: 'delegated',
+      accessToken: 'mock-token',
+      account: { id: 'user', label: 'user@example.com' },
+      scopes: ['platform'],
+    } as unknown as import('vscode').AuthenticationSession;
 
-      const session = await auth.requireSession(false);
-      expect(session?.accessToken).toBe('env-token');
-      expect(session?.account.label).toBe('env@example.com');
-      expect(vscode.authentication.getSession).not.toHaveBeenCalled();
+    const getSessionMock = vscode.authentication.getSession as jest.MockedFunction<typeof vscode.authentication.getSession>;
+    getSessionMock.mockImplementation(async () => mockSession);
+
+    const session = await auth.requireSession(true);
+
+    expect(vscode.authentication.getSession).toHaveBeenCalledWith('aegis', ['platform'], { createIfNone: true });
+    expect(session).toBe(mockSession);
+  });
+
+  test('requireSession retries silently when dialogs are suppressed in tests', async () => {
+    const mockSession = {
+      id: 'delegated',
+      accessToken: 'mock-token',
+      account: { id: 'user', label: 'user@example.com' },
+      scopes: ['platform'],
+    } as unknown as import('vscode').AuthenticationSession;
+
+    const getSessionMock = vscode.authentication.getSession as jest.MockedFunction<typeof vscode.authentication.getSession>;
+    getSessionMock.mockImplementationOnce(async () => {
+      throw new Error('DialogService: refused to show dialog in tests.');
+    });
+    getSessionMock.mockResolvedValueOnce(mockSession);
+
+    const session = await auth.requireSession(true);
+
+    expect(getSessionMock).toHaveBeenNthCalledWith(1, 'aegis', ['platform'], { createIfNone: true });
+    expect(getSessionMock).toHaveBeenNthCalledWith(2, 'aegis', ['platform'], { createIfNone: false, silent: true });
+    expect(session).toBe(mockSession);
+  });
+
+  test('requireSession falls back to automation credentials when dialogs are suppressed', async () => {
+    const originalFetch = globalThis.fetch;
+    const username = 'automation@example.com';
+    const password = 'secret';
+    process.env.AEGIS_TEST_USERNAME = username;
+    process.env.AEGIS_TEST_PASSWORD = password;
+
+    const accessToken = createJwt({ sub: 'user-subject', email: username });
+    const idToken = createJwt({ sub: 'user-subject', email: username });
+
+    const mockFetch = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ access_token: accessToken, id_token: idToken }),
+    }));
+    // @ts-expect-error override global fetch for test
+    globalThis.fetch = mockFetch;
+
+    const getSessionMock = vscode.authentication.getSession as jest.MockedFunction<typeof vscode.authentication.getSession>;
+    getSessionMock.mockImplementationOnce(async () => {
+      throw new Error('DialogService: refused to show dialog in tests.');
+    });
+    getSessionMock.mockResolvedValueOnce(undefined);
+
+    try {
+      const session = await auth.requireSession(true);
+
+      expect(getSessionMock).toHaveBeenNthCalledWith(1, 'aegis', ['platform'], { createIfNone: true });
+      expect(getSessionMock).toHaveBeenNthCalledWith(2, 'aegis', ['platform'], { createIfNone: false, silent: true });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(session?.accessToken).toBe(accessToken);
+      expect(session?.account.label).toBe(username);
     } finally {
-      if (originalToken === undefined) {
-        delete process.env.AEGIS_TEST_TOKEN;
-      } else {
-        process.env.AEGIS_TEST_TOKEN = originalToken;
-      }
-      if (originalEmail === undefined) {
-        delete process.env.AEGIS_TEST_EMAIL;
-      } else {
-        process.env.AEGIS_TEST_EMAIL = originalEmail;
-      }
+      globalThis.fetch = originalFetch;
+      delete process.env.AEGIS_TEST_USERNAME;
+      delete process.env.AEGIS_TEST_PASSWORD;
     }
+  });
+
+  test('requireSession uses workspace session token when available', async () => {
+    const workspaceToken = createJwt({ sub: 'workspace-subject', email: 'workspace@example.com' });
+    readFileSpy.mockResolvedValueOnce(JSON.stringify({ user_token: workspaceToken, user_email: 'workspace@example.com' }));
+
+    const getSessionMock = vscode.authentication.getSession as jest.MockedFunction<typeof vscode.authentication.getSession>;
+    getSessionMock.mockImplementationOnce(async () => {
+      throw new Error('DialogService: refused to show dialog in tests.');
+    });
+    getSessionMock.mockResolvedValueOnce(undefined);
+
+    const session = await auth.requireSession(true);
+
+    expect(getSessionMock).toHaveBeenNthCalledWith(1, 'aegis', ['platform'], { createIfNone: true });
+    expect(getSessionMock).toHaveBeenNthCalledWith(2, 'aegis', ['platform'], { createIfNone: false, silent: true });
+    expect(readFileSpy).toHaveBeenCalled();
+    expect(session?.accessToken).toBe(workspaceToken);
+    expect(session?.account.label).toBe('workspace@example.com');
+    expect(session?.account.id).toBe('workspace-subject');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   test('handleAuthUri ignores non-auth paths and returns false', async () => {
