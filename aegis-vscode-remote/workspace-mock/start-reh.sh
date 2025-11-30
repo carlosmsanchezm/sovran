@@ -74,6 +74,18 @@ if [ "$QUALITY" = "insider" ]; then
   SERVER_BIN="code-server-insiders"
 fi
 
+HOOK_DIR="/workspace-bootstrap.d"
+if [ -d "$HOOK_DIR" ]; then
+  for hook in "$HOOK_DIR"/*.sh; do
+    if [ ! -e "$hook" ]; then
+      continue
+    fi
+    echo "[bootstrap] sourcing ${hook}"
+    # shellcheck disable=SC1090
+    source "$hook"
+  done
+fi
+
 exec "${REH_DIR}/bin/current/bin/${SERVER_BIN}" \
   --host 0.0.0.0 \
   --port 11111 \

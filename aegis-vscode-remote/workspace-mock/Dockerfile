@@ -16,6 +16,9 @@ WORKDIR /root
 COPY start-reh.sh /usr/local/bin/start-reh.sh
 RUN chmod +x /usr/local/bin/start-reh.sh
 
+COPY bootstrap /workspace-bootstrap.d
+RUN chmod +x /workspace-bootstrap.d/*.sh
+
 EXPOSE 11111
 
 ENTRYPOINT ["/usr/bin/tini","--"]

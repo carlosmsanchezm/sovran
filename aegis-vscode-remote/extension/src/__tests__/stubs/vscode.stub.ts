@@ -32,6 +32,15 @@ const showInputBox = jest.fn(async (_options?: any) => undefined as string | und
 
 export const window = {
   createTreeView: jest.fn(() => ({ dispose: jest.fn() })),
+  createOutputChannel: jest.fn(() => ({
+    appendLine: jest.fn(),
+    show: jest.fn(),
+  })),
+  createStatusBarItem: jest.fn(() => ({
+    text: '',
+    tooltip: undefined,
+    show: jest.fn(),
+  })),
   registerUriHandler: jest.fn(() => ({ dispose: jest.fn() })),
   showErrorMessage: jest.fn(),
   showInputBox,
@@ -46,6 +55,11 @@ export const commands = {
   executeCommand: jest.fn(),
   registerCommand: jest.fn(() => ({ dispose: jest.fn() })),
 };
+
+export enum StatusBarAlignment {
+  Left = 1,
+  Right = 2,
+}
 
 type GetSession = (id: string, scopes: readonly string[], options?: any) => Promise<any>;
 const getSession = jest.fn(async (_id: string, _scopes: readonly string[], _options?: any) => undefined) as jest.MockedFunction<GetSession>;
@@ -63,6 +77,25 @@ export type AuthenticationSession = {
 };
 
 export class CancellationError extends Error {}
+
+export enum TreeItemCollapsibleState {
+  None = 0,
+  Collapsed = 1,
+  Expanded = 2,
+}
+
+export class ThemeIcon {
+  constructor(public readonly id: string) {}
+}
+
+export class TreeItem {
+  public contextValue?: string;
+  public description?: string;
+  public iconPath?: ThemeIcon;
+  public command?: { command: string; title: string; arguments?: unknown[] };
+
+  constructor(public readonly label: string, public readonly collapsibleState: TreeItemCollapsibleState) {}
+}
 
 export type ExtensionContext = {
   subscriptions: { dispose?: () => void }[];

@@ -16,6 +16,7 @@ class WorkspaceTreeItem extends vscode.TreeItem {
     const descriptionParts: string[] = [];
     if (workspace.cluster) descriptionParts.push(workspace.cluster);
     if (workspace.dns) descriptionParts.push(workspace.dns);
+    if (workspace.profile) descriptionParts.push(`profile: ${workspace.profile}`);
     this.description = descriptionParts.join(' · ') || undefined;
     this.command = {
       command: 'aegis.connect',

@@ -43,6 +43,8 @@ message WorkspaceSpec {
   int64 max_duration_seconds = 5;
   bool interactive = 6;
   repeated int32 ports = 7;
+  string profile = 8;
+  string persona = 9;
 }
 message TrainingSpec  { string flavor = 1; int32 workers = 2; int32 gpus_per_worker = 3; string image = 4; repeated string command = 5; bool gang = 6; int64 max_duration_seconds = 7; }
 

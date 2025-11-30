@@ -1,0 +1,1968 @@
+/Users/carlossanchez/code/sovran/aegis-vscode-remote/extension/src/extension.ts
+/// <reference path="../vscode.proposed.resolvers.d.ts" />
+import * as vscode from 'vscode';
+import { out, status, WorkspacesProvider } from './ui';
+import { AegisResolver, forceReconnect, getLastConnection } from './resolver';
+import { registerDiagnostics } from './diagnostics';
+import { getSettings, onDidChangeSettings } from './config';
+import { handleAuthUri, initializeAuth, requireSession, signOut } from './auth';
+import { initializePlatform, refreshPlatformSettings } from './platform';
+import { configureHttpSecurity, disposeHttpSecurity } from './http';
+
+export async function activate(ctx: vscode.ExtensionContext) {
+  out.appendLine('Aegis Remote activated');
+  status.set('$(circle-outline) Aegis: Idle');
+
+  const initialSettings = getSettings();
+  await configureHttpSecurity(initialSettings.security);
+
+  await initializeAuth(ctx);
+  await initializePlatform(ctx);
+
+  ctx.subscriptions.push(new vscode.Disposable(() => { void disposeHttpSecurity(); }));
+
+  ctx.subscriptions.push(vscode.workspace.registerRemoteAuthorityResolver('aegis', AegisResolver));
+  registerDiagnostics(ctx, getLastConnection);
+
+  const provider = new WorkspacesProvider(ctx);
+  const treeView = vscode.window.createTreeView('aegis.workspaces', { treeDataProvider: provider });
+  ctx.subscriptions.push(provider, treeView);
+
+  // Handle external URIs from browser (vscode://aegis.aegis-remote/aegis+<workload-id>)
+  ctx.subscriptions.push(
+    vscode.window.registerUriHandler({
+      handleUri: async (uri: vscode.Uri) => {
+        out.appendLine(`[uri-handler] received URI: ${uri.toString()}`);
+        const handled = await handleAuthUri(uri);
+        if (handled) {
+          out.appendLine('[uri-handler] handled OAuth callback');
+          return;
+        }
+
+        // Extract workspace ID from URI path (format: /aegis+w-xxxxx)
+        const match = uri.path.match(/^\/aegis\+(.+)$/);
+        if (match) {
+          const workspaceId = match[1];
+          out.appendLine(`[uri-handler] connecting to workspace: ${workspaceId}`);
+
+          // Ensure user is signed in
+          await requireSession(true);
+
+          // Open the workspace in a new window
+          const remoteUri = vscode.Uri.parse(`vscode-remote://aegis+${workspaceId}/home/project`);
+          await vscode.commands.executeCommand('vscode.openFolder', remoteUri, { forceNewWindow: true });
+        } else {
+          out.appendLine(`[uri-handler] unrecognized URI format: ${uri.path}`);
+        }
+      }
+    })
+  );
+
+  ctx.subscriptions.push(
+    onDidChangeSettings(async () => {
+      const cfg = getSettings();
+      out.appendLine('[settings] updated ' + JSON.stringify(cfg));
+      await configureHttpSecurity(cfg.security);
+      await refreshPlatformSettings();
+      provider.refresh();
+    })
+  );
+
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand('aegis.showLogs', () => out.show()),
+    vscode.commands.registerCommand('aegis.disconnect', () => vscode.commands.executeCommand('workbench.action.closeWindow')),
+    vscode.commands.registerCommand('aegis.reconnect', () => {
+      forceReconnect();
+    }),
+    vscode.commands.registerCommand('aegis.connect', async (wid?: string) => {
+      await requireSession(true);
+      const settings = getSettings();
+      const workspaceId = wid || settings.defaultWorkspaceId;
+      if (!workspaceId) {
+        vscode.window.showErrorMessage('Select a workspace to connect.');
+        return;
+      }
+      const uri = vscode.Uri.parse(`vscode-remote://aegis+${workspaceId}/home/project`);
+      await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
+    }),
+    vscode.commands.registerCommand('aegis.refreshWorkspaces', () => provider.refresh()),
+    vscode.commands.registerCommand('aegis.signIn', async () => {
+      await requireSession(true);
+      provider.refresh();
+    }),
+    vscode.commands.registerCommand('aegis.signOut', async () => {
+      await signOut();
+      provider.refresh();
+    })
+  );
+}
+
+export function deactivate() {}
+
+
+/Users/carlossanchez/code/sovran/aegis-vscode-remote/extension/src/auth.ts
+import * as crypto from 'crypto';
+import { URLSearchParams } from 'url';
+import * as path from 'path';
+import { promises as fs } from 'fs';
+import * as vscode from 'vscode';
+import { getSettings } from './config';
+import { getHttpDispatcher } from './http';
+
+const AUTH_PROVIDER_ID = 'aegis';
+const AUTH_PROVIDER_LABEL = 'Aegis Platform';
+const SECRET_SESSION_KEY = 'aegis.auth.session.v1';
+const LEGACY_SECRET_TOKEN_KEY = 'aegis.auth.token';
+const LEGACY_SECRET_SUBJECT_KEY = 'aegis.auth.subject';
+const SESSION_ID = 'aegis-default';
+const LOGIN_TIMEOUT_MS = 120_000;
+const REFRESH_SKEW_MS = 60_000;
+
+type TokenResponse = {
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number | string;
+  id_token?: string;
+  scope?: string;
+  token_type?: string;
+  [key: string]: unknown;
+};
+
+interface PersistedSession {
+  version: 1;
+  accessToken: string;
+  refreshToken?: string;
+  idToken?: string;
+  expiresAt: number;
+  scope: string;
+  account: { id: string; label: string };
+  userHeader?: string;
+}
+
+interface PendingAuth {
+  state: string;
+  codeVerifier: string;
+  scope: string;
+  resolve: (session: PersistedSession) => void;
+  reject: (err: unknown) => void;
+  timeout: NodeJS.Timeout;
+}
+
+const sessionMetadata = new Map<string, { userHeader?: string }>();
+let automationSessionCache: vscode.AuthenticationSession | undefined;
+
+async function automationSessionFromEnv(): Promise<vscode.AuthenticationSession | undefined> {
+  if (automationSessionCache) {
+    return automationSessionCache;
+  }
+
+  const username = process.env.AEGIS_TEST_USERNAME?.trim();
+  const password = process.env.AEGIS_TEST_PASSWORD ?? '';
+  const sessionFromFile = await loadSessionFromWorkspaceFile();
+  if (sessionFromFile) {
+    const { token, email } = sessionFromFile;
+    const claims = parseJwt(token);
+    const { account, userHeader } = deriveAccountInfo(claims, email);
+    const session: vscode.AuthenticationSession = {
+      id: SESSION_ID,
+      accessToken: token,
+      account,
+      scopes: ['platform'],
+    };
+    sessionMetadata.set(SESSION_ID, { userHeader });
+    automationSessionCache = session;
+    return session;
+  }
+
+  if (!username || !password) {
+    return undefined;
+  }
+
+  const authority = (process.env.AEGIS_AUTH_AUTHORITY ?? 'https://keycloak.localtest.me/realms/aegis').trim().replace(/\/+$/u, '');
+  const clientId = process.env.AEGIS_AUTH_CLIENT_ID?.trim() || 'vscode-extension';
+  const audience = process.env.AEGIS_PLATFORM_AUTH_SCOPE?.trim() || process.env.AEGIS_AUTH_SCOPE?.trim();
+
+  const body = new URLSearchParams();
+  body.set('grant_type', 'password');
+  body.set('client_id', clientId);
+  body.set('username', username);
+  body.set('password', password);
+  if (audience) {
+    body.set('audience', audience);
+  }
+  const disableOffline = [
+    process.env.AEGIS_AUTH_DISABLE_OFFLINE,
+    process.env.AEGIS_DISABLE_OFFLINE_SCOPE,
+  ]
+    .map((value) => (value ?? '').trim().toLowerCase())
+    .some((value) => value === '1' || value === 'true' || value === 'yes');
+  const scopeParts = ['openid', 'profile', 'email'];
+  if (!disableOffline) {
+    scopeParts.push('offline_access');
+  }
+  const scope = scopeParts.join(' ');
+  body.set('scope', scope);
+
+  const tokenUrl = `${authority}/protocol/openid-connect/token`;
+  const response = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Automated Keycloak login failed (${response.status} ${response.statusText}).`);
+  }
+
+  const tokenResponse = (await response.json()) as TokenResponse;
+  const accessToken = tokenResponse.access_token?.trim();
+  if (!accessToken) {
+    throw new Error('Automated Keycloak login did not return an access token.');
+  }
+  const claims = parseJwt(tokenResponse.id_token ?? accessToken);
+  const { account, userHeader } = deriveAccountInfo(claims, username);
+
+  const session: vscode.AuthenticationSession = {
+    id: SESSION_ID,
+    accessToken,
+    account,
+    scopes: ['platform'],
+  };
+
+  sessionMetadata.set(SESSION_ID, { userHeader });
+  automationSessionCache = session;
+  return session;
+}
+
+async function loadSessionFromWorkspaceFile(): Promise<{ token: string; email?: string } | undefined> {
+  const candidates = new Set<string>();
+  const explicit = process.env.AEGIS_WORKSPACE_OUTPUT?.trim();
+  if (explicit) {
+    candidates.add(explicit);
+  }
+  candidates.add(path.resolve(__dirname, '..', '__tests__', 'e2e-real', '.workspace-session.json'));
+
+  for (const candidate of candidates) {
+    try {
+      const raw = await fs.readFile(candidate, 'utf8');
+      const parsed = JSON.parse(raw) as { user_token?: string | null; user_email?: string | null };
+      const token = parsed.user_token?.trim();
+      if (token) {
+        return { token, email: parsed.user_email ?? undefined };
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        console.warn('[auth] failed to read workspace session file', candidate, err);
+      }
+    }
+  }
+  return undefined;
+}
+
+function toBase64Url(buffer: Buffer) {
+  return buffer
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/u, '');
+}
+
+function createPkcePair(): { verifier: string; challenge: string } {
+  const verifier = toBase64Url(crypto.randomBytes(32));
+  const challenge = toBase64Url(crypto.createHash('sha256').update(verifier).digest());
+  return { verifier, challenge };
+}
+
+function parseJwt(token: string | undefined): Record<string, unknown> | undefined {
+  if (!token) {
+    return undefined;
+  }
+  const parts = token.split('.');
+  if (parts.length < 2) {
+    return undefined;
+  }
+  const payload = parts[1];
+  const padded = payload.padEnd(payload.length + (4 - (payload.length % 4)) % 4, '=');
+  try {
+    const json = Buffer.from(padded.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    return JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeClaim(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function deriveAccountInfo(claims: Record<string, unknown> | undefined, fallbackSubject?: string) {
+  const subject =
+    normalizeClaim(claims?.sub) ||
+    normalizeClaim(fallbackSubject) ||
+    'aegis-user';
+  const email = normalizeClaim(claims?.email);
+  const preferredUsername = normalizeClaim(claims?.preferred_username);
+  const friendlyName = normalizeClaim(claims?.name);
+  const label = email || preferredUsername || friendlyName || subject;
+  const userHeader = email || preferredUsername || subject;
+  return { account: { id: subject, label }, userHeader };
+}
+
+function computeExpiresAt(expiresIn: number | string | undefined): number {
+  let seconds: number | undefined;
+  if (typeof expiresIn === 'number') {
+    seconds = expiresIn;
+  } else if (typeof expiresIn === 'string') {
+    const parsed = Number.parseInt(expiresIn, 10);
+    if (!Number.isNaN(parsed)) {
+      seconds = parsed;
+    }
+  }
+  if (!seconds || seconds <= 0) {
+    seconds = 5 * 60;
+  }
+  return Date.now() + seconds * 1000;
+}
+
+function recordMetadata(session: PersistedSession) {
+  sessionMetadata.set(SESSION_ID, { userHeader: session.userHeader ?? session.account.label });
+}
+
+function buildScope(requested: readonly string[], configured: readonly string[], audience?: string) {
+  const scopeSet = new Set<string>();
+  for (const value of configured) {
+    const trimmed = value.trim();
+    if (trimmed) {
+      scopeSet.add(trimmed);
+    }
+  }
+  for (const value of requested) {
+    const trimmed = value.trim();
+    if (trimmed) {
+      scopeSet.add(trimmed);
+    }
+  }
+  if (audience) {
+    scopeSet.add(audience.trim());
+  }
+  return Array.from(scopeSet).join(' ');
+}
+
+let providerInstance: AegisAuthenticationProvider | undefined;
+
+class AegisAuthenticationProvider implements vscode.AuthenticationProvider, vscode.Disposable {
+  private sessions: vscode.AuthenticationSession[] = [];
+  private persisted: PersistedSession | undefined;
+  private pending?: PendingAuth;
+  private readonly _onDidChangeSessions = new vscode.EventEmitter<vscode.AuthenticationProviderAuthenticationSessionsChangeEvent>();
+  readonly onDidChangeSessions = this._onDidChangeSessions.event;
+
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
+  dispose() {
+    this._onDidChangeSessions.dispose();
+    if (this.pending) {
+      clearTimeout(this.pending.timeout);
+      this.pending.reject(new vscode.CancellationError());
+      this.pending = undefined;
+    }
+  }
+
+  private async ensurePersistedSession(): Promise<PersistedSession | undefined> {
+    if (this.persisted) {
+      return this.persisted;
+    }
+
+    const raw = await this.context.secrets.get(SECRET_SESSION_KEY);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as PersistedSession;
+        if (parsed && typeof parsed.accessToken === 'string') {
+          this.persisted = parsed;
+          recordMetadata(parsed);
+          return parsed;
+        }
+      } catch {
+        await this.context.secrets.delete(SECRET_SESSION_KEY);
+      }
+    }
+
+    // Legacy secret cleanup (manual token flow)
+    const legacyToken = await this.context.secrets.get(LEGACY_SECRET_TOKEN_KEY);
+    if (legacyToken) {
+      await this.context.secrets.delete(LEGACY_SECRET_TOKEN_KEY);
+    }
+    const legacySubject = await this.context.secrets.get(LEGACY_SECRET_SUBJECT_KEY);
+    if (legacySubject) {
+      await this.context.secrets.delete(LEGACY_SECRET_SUBJECT_KEY);
+    }
+
+    return undefined;
+  }
+
+  private async storePersisted(session: PersistedSession) {
+    this.persisted = session;
+    recordMetadata(session);
+    await this.context.secrets.store(SECRET_SESSION_KEY, JSON.stringify(session));
+    await this.context.secrets.delete(LEGACY_SECRET_TOKEN_KEY);
+    await this.context.secrets.delete(LEGACY_SECRET_SUBJECT_KEY);
+  }
+
+  private async clearPersisted() {
+    this.sessions = [];
+    this.persisted = undefined;
+    sessionMetadata.delete(SESSION_ID);
+    await this.context.secrets.delete(SECRET_SESSION_KEY);
+    await this.context.secrets.delete(LEGACY_SECRET_TOKEN_KEY);
+    await this.context.secrets.delete(LEGACY_SECRET_SUBJECT_KEY);
+  }
+
+  private isExpiringSoon(session: PersistedSession) {
+    return session.expiresAt <= Date.now() + REFRESH_SKEW_MS;
+  }
+
+  private buildSession(scopes: readonly string[]): vscode.AuthenticationSession {
+    const hydrated = this.persisted;
+    if (!hydrated) {
+      throw new Error('Authentication session not available.');
+    }
+    const sessionScopes = scopes.length > 0 ? [...new Set(scopes)] : ['platform'];
+    const session: vscode.AuthenticationSession = {
+      id: SESSION_ID,
+      accessToken: hydrated.accessToken,
+      account: hydrated.account,
+      scopes: sessionScopes,
+    };
+    recordMetadata(hydrated);
+    return session;
+  }
+
+  async getSessions(scopes?: readonly string[], _options?: vscode.AuthenticationProviderSessionOptions): Promise<vscode.AuthenticationSession[]> {
+    const requested = scopes ?? ['platform'];
+    const persisted = await this.ensurePersistedSession();
+    if (!persisted) {
+      this.sessions = [];
+      return [];
+    }
+
+    if (this.isExpiringSoon(persisted) && persisted.refreshToken) {
+      try {
+        const refreshed = await this.refreshTokens(persisted.refreshToken, persisted.scope);
+        const merged: PersistedSession = {
+          ...persisted,
+          ...refreshed,
+          expiresAt: refreshed.expiresAt,
+          accessToken: refreshed.accessToken,
+          refreshToken: refreshed.refreshToken ?? persisted.refreshToken,
+          userHeader: refreshed.userHeader ?? persisted.userHeader,
+          scope: refreshed.scope ?? persisted.scope,
+          account: refreshed.account ?? persisted.account,
+        };
+        await this.storePersisted(merged);
+      } catch (err) {
+        await this.clearPersisted();
+        this._onDidChangeSessions.fire({ added: [], removed: this.sessions, changed: [] });
+        throw err instanceof Error ? err : new Error(String(err));
+      }
+    } else if (this.isExpiringSoon(persisted) && !persisted.refreshToken) {
+      await this.clearPersisted();
+      this._onDidChangeSessions.fire({ added: [], removed: this.sessions, changed: [] });
+      return [];
+    }
+
+    const session = this.buildSession(requested);
+    this.sessions = [session];
+    return [...this.sessions];
+  }
+
+  async createSession(scopes: readonly string[], _options?: vscode.AuthenticationProviderSessionOptions): Promise<vscode.AuthenticationSession> {
+    const settings = getSettings();
+    const { auth, platform } = settings;
+    if (!auth.authority || !auth.clientId) {
+      throw new Error('Configure "aegisRemote.auth.authority" and "aegisRemote.auth.clientId" before signing in.');
+    }
+
+    const scope = buildScope(scopes, auth.scopes, platform?.authScope);
+    const { verifier, challenge } = createPkcePair();
+    const state = toBase64Url(crypto.randomBytes(18));
+    const authUrl = new URL(`${auth.authority.replace(/\/+$/u, '')}/protocol/openid-connect/auth`);
+    authUrl.searchParams.set('client_id', auth.clientId);
+    authUrl.searchParams.set('redirect_uri', auth.redirectUri);
+    authUrl.searchParams.set('response_type', 'code');
+    authUrl.searchParams.set('scope', scope);
+    authUrl.searchParams.set('code_challenge', challenge);
+    authUrl.searchParams.set('code_challenge_method', 'S256');
+    authUrl.searchParams.set('state', state);
+    if (auth.prompt) {
+      authUrl.searchParams.set('prompt', auth.prompt);
+    }
+
+    const pendingPromise = new Promise<PersistedSession>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pending = undefined;
+        reject(new vscode.CancellationError());
+      }, LOGIN_TIMEOUT_MS);
+      this.pending = { state, codeVerifier: verifier, scope, resolve, reject, timeout };
+    });
+
+    await vscode.env.openExternal(vscode.Uri.parse(authUrl.toString()));
+
+    let persisted: PersistedSession;
+    try {
+      persisted = await pendingPromise;
+    } finally {
+      if (this.pending) {
+        clearTimeout(this.pending.timeout);
+        this.pending = undefined;
+      }
+    }
+
+    await this.storePersisted(persisted);
+    const session = this.buildSession(scopes);
+    this.sessions = [session];
+    this._onDidChangeSessions.fire({ added: [session], removed: [], changed: [] });
+    return session;
+  }
+
+  async removeSession(_id: string): Promise<void> {
+    const removed = [...this.sessions];
+    await this.clearPersisted();
+    this._onDidChangeSessions.fire({ added: [], removed, changed: [] });
+  }
+
+  async clearSession() {
+    await this.removeSession(SESSION_ID);
+  }
+
+  async handleUri(uri: vscode.Uri): Promise<boolean> {
+    if (uri.path !== '/auth') {
+      return false;
+    }
+    const pending = this.pending;
+    if (!pending) {
+      return true;
+    }
+
+    const params = new URLSearchParams(uri.query ?? '');
+    const returnedState = params.get('state') ?? '';
+    if (returnedState !== pending.state) {
+      pending.reject(new Error('OAuth state mismatch.'));
+      return true;
+    }
+
+    const error = params.get('error');
+    if (error) {
+      const description = params.get('error_description');
+      pending.reject(new Error(description ? `${error}: ${description}` : error));
+      return true;
+    }
+
+    const code = params.get('code');
+    if (!code) {
+      pending.reject(new Error('Authorization response missing code.'));
+      return true;
+    }
+
+    try {
+      const session = await this.exchangeAuthorizationCode(code, pending.codeVerifier, pending.scope);
+      pending.resolve(session);
+    } catch (err) {
+      pending.reject(err);
+    }
+    return true;
+  }
+
+  private async exchangeAuthorizationCode(code: string, verifier: string, scope: string): Promise<PersistedSession> {
+    const { auth } = getSettings();
+    const tokenResponse = await this.postTokenRequest(
+      new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: auth.redirectUri,
+        client_id: auth.clientId,
+        code_verifier: verifier,
+      }),
+      'Token exchange'
+    );
+    return this.buildPersistedFromResponse(tokenResponse, scope);
+  }
+
+  private async refreshTokens(refreshToken: string, scope: string): Promise<PersistedSession> {
+    const { auth } = getSettings();
+    const tokenResponse = await this.postTokenRequest(
+      new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: auth.clientId,
+        scope,
+      }),
+      'Token refresh'
+    );
+    return this.buildPersistedFromResponse(tokenResponse, scope);
+  }
+
+  private async postTokenRequest(
+    body: URLSearchParams,
+    context: 'Token exchange' | 'Token refresh'
+  ): Promise<TokenResponse> {
+    const { auth } = getSettings();
+    const tokenUrl = `${auth.authority.replace(/\/+$/u, '')}/protocol/openid-connect/token`;
+
+    let response: Response;
+    try {
+      const dispatcher = getHttpDispatcher();
+      response = await globalThis.fetch(tokenUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body,
+        ...(dispatcher ? { dispatcher } : {}),
+      });
+    } catch (err) {
+      let reason = err instanceof Error ? err.message : String(err);
+      const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
+      if (cause instanceof Error && cause.message) {
+        reason += ` (${cause.message})`;
+      }
+      throw new Error(
+        `${context} failed: ${reason}. Verify the Keycloak URL, client configuration, and TLS trust (aegisRemote.security.caPath).`,
+        { cause: err }
+      );
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`${context} failed (${response.status}): ${text || 'No response body'}`);
+    }
+
+    return (await response.json()) as TokenResponse;
+  }
+
+  private buildPersistedFromResponse(tokenResponse: TokenResponse, scope: string): PersistedSession {
+    if (!tokenResponse.access_token) {
+      throw new Error('Token response did not include an access token.');
+    }
+    const claims = parseJwt(tokenResponse.id_token ?? tokenResponse.access_token);
+    const { account, userHeader } = deriveAccountInfo(claims);
+    const expiresAt = computeExpiresAt(tokenResponse.expires_in);
+    return {
+      version: 1,
+      accessToken: tokenResponse.access_token,
+      refreshToken: tokenResponse.refresh_token,
+      idToken: tokenResponse.id_token,
+      expiresAt,
+      scope: tokenResponse.scope ?? scope,
+      account,
+      userHeader,
+    };
+  }
+}
+
+export async function initializeAuth(context: vscode.ExtensionContext) {
+  if (providerInstance) {
+    return;
+  }
+  providerInstance = new AegisAuthenticationProvider(context);
+  context.subscriptions.push(providerInstance);
+  context.subscriptions.push(
+    vscode.authentication.registerAuthenticationProvider(
+      AUTH_PROVIDER_ID,
+      AUTH_PROVIDER_LABEL,
+      providerInstance,
+      { supportsMultipleAccounts: false }
+    )
+  );
+}
+
+export async function requireSession(createIfNone = true): Promise<vscode.AuthenticationSession | undefined> {
+  try {
+    return await vscode.authentication.getSession(AUTH_PROVIDER_ID, ['platform'], { createIfNone });
+  } catch (err) {
+    if (
+      createIfNone &&
+      err instanceof Error &&
+      /DialogService: refused to show dialog in tests/.test(err.message)
+    ) {
+      const existing = await vscode.authentication.getSession(AUTH_PROVIDER_ID, ['platform'], {
+        createIfNone: false,
+        silent: true,
+      });
+      if (existing) {
+        return existing;
+      }
+      return automationSessionFromEnv();
+    }
+    throw err;
+  }
+}
+
+export async function signOut() {
+  if (providerInstance) {
+    await providerInstance.clearSession();
+  }
+}
+
+export async function handleAuthUri(uri: vscode.Uri): Promise<boolean> {
+  if (!providerInstance) {
+    return false;
+  }
+  return providerInstance.handleUri(uri);
+}
+
+export function getSessionUser(session: vscode.AuthenticationSession): string | undefined {
+  const meta = sessionMetadata.get(session.id);
+  if (meta?.userHeader) {
+    return meta.userHeader;
+  }
+  const claims = parseJwt(session.accessToken);
+  const { userHeader } = deriveAccountInfo(claims);
+  return userHeader;
+}
+
+
+/Users/carlossanchez/code/sovran/aegis-vscode-remote/extension/src/config.ts
+import * as vscode from 'vscode';
+
+export type LogLevel = 'info' | 'debug' | 'trace';
+
+export interface SecuritySettings {
+  rejectUnauthorized: boolean;
+  mtlsSource: 'platform' | 'system';
+  caPath?: string;
+}
+
+export interface PlatformSettings {
+  grpcEndpoint: string;
+  namespace: string;
+  authScope: string;
+  projectId: string;
+}
+
+export interface AuthSettings {
+  authority: string;
+  clientId: string;
+  redirectUri: string;
+  scopes: string[];
+  prompt?: string;
+}
+
+export interface AegisSettings {
+  platform: PlatformSettings;
+  auth: AuthSettings;
+  defaultWorkspaceId?: string;
+  heartbeatIntervalMs: number;
+  idleTimeoutMs: number;
+  security: SecuritySettings;
+  logLevel: LogLevel;
+}
+
+export function getSettings(): AegisSettings {
+  const cfg = vscode.workspace.getConfiguration('aegisRemote');
+  return {
+    platform: {
+      grpcEndpoint: cfg.get('platform.grpcEndpoint', ''),
+      namespace: cfg.get('platform.namespace', 'default'),
+      authScope: cfg.get('platform.authScope', 'aegis-platform'),
+      projectId: cfg.get('platform.projectId', ''),
+    },
+    auth: {
+      authority: cfg.get('auth.authority', ''),
+      clientId: cfg.get('auth.clientId', ''),
+      redirectUri: cfg.get('auth.redirectUri', 'vscode://aegis.aegis-remote/auth'),
+      scopes: cfg.get('auth.scopes', ['openid', 'profile', 'email', 'offline_access']),
+      prompt: cfg.get('auth.prompt', ''),
+    },
+    defaultWorkspaceId: cfg.get('defaultWorkspaceId', ''),
+    heartbeatIntervalMs: cfg.get('heartbeatIntervalMs', 15_000),
+    idleTimeoutMs: cfg.get('idleTimeoutMs', 45_000),
+    security: {
+      rejectUnauthorized: cfg.get('security.rejectUnauthorized', true),
+      mtlsSource: cfg.get('security.mtlsSource', 'platform'),
+      caPath: cfg.get('security.caPath', ''),
+    },
+    logLevel: cfg.get('logLevel', 'info'),
+  };
+}
+
+export function onDidChangeSettings(listener: () => void): vscode.Disposable {
+  return vscode.workspace.onDidChangeConfiguration((e) => {
+    if (e.affectsConfiguration('aegisRemote')) {
+      listener();
+    }
+  });
+}
+
+
+/Users/carlossanchez/code/sovran/aegis-vscode-remote/extension/src/connection.ts
+import * as vscode from 'vscode';
+import WebSocket from 'ws';
+import { LogLevel } from './config';
+
+export interface Managed {
+  readonly onDidReceiveMessage: vscode.Event<Uint8Array>;
+  readonly onDidClose: vscode.Event<Error | undefined>;
+  readonly onDidEnd: vscode.Event<void>;
+  send(data: Uint8Array): void;
+  end(): void;
+}
+
+export interface ConnMetrics {
+  attempt: number;
+  bytesTx: number;
+  bytesRx: number;
+  lastClose?: { code?: number; reason?: string };
+  rttMs?: number;
+  lastError?: string;
+  lastHeartbeatAt?: number;
+  lastMessageAt?: number;
+}
+
+export interface ConnectionOptions {
+  heartbeatIntervalMs: number;
+  idleTimeoutMs: number;
+  logLevel: LogLevel;
+  log: (message: string) => void;
+  headers?: Record<string, string>;
+  tls?: {
+    ca?: string | Buffer | Array<string | Buffer>;
+    cert?: string | Buffer;
+    key?: string | Buffer;
+    servername?: string;
+  };
+  rejectUnauthorized?: boolean;
+}
+
+export class ConnectionManager {
+  private attempt = 0;
+  private lastRxAt = 0;
+  private lastTxAt = 0;
+  private startAt = 0;
+  private hb?: NodeJS.Timeout;
+  private idleTimer?: NodeJS.Timeout;
+  private metrics: ConnMetrics = { attempt: 0, bytesRx: 0, bytesTx: 0 };
+
+  constructor(private url: string, private opts: ConnectionOptions) {}
+
+  open(): Thenable<Managed> {
+    const onRx = new vscode.EventEmitter<Uint8Array>();
+    const onClose = new vscode.EventEmitter<Error | undefined>();
+    const onEnd = new vscode.EventEmitter<void>();
+
+    this.attempt += 1;
+    this.metrics = { attempt: this.attempt, bytesRx: 0, bytesTx: 0 };
+    this.startAt = Date.now();
+
+    return new Promise((resolve, reject) => {
+      const wsOptions: WebSocket.ClientOptions = {
+        perMessageDeflate: false,
+        rejectUnauthorized: this.opts.rejectUnauthorized !== false,
+        headers: this.opts.headers,
+        ca: this.opts.tls?.ca,
+        cert: this.opts.tls?.cert,
+        key: this.opts.tls?.key,
+      };
+      if (this.opts.tls?.servername) {
+        (wsOptions as Record<string, unknown>).servername = this.opts.tls.servername;
+      }
+      const ws = new WebSocket(this.url, wsOptions);
+      ws.binaryType = 'arraybuffer';
+
+      ws.on('unexpected-response', (_req, res) => {
+        const status = res.statusCode ?? 0;
+        this.opts.log(`[conn] unexpected response status=${status}`);
+        let body = '';
+        res.on('data', (chunk) => {
+          if (body.length > 4096) {
+            return;
+          }
+          body += chunk instanceof Buffer ? chunk.toString('utf8') : String(chunk);
+        });
+        res.on('end', () => {
+          if (body) {
+            const snippet = body.length > 4096 ? `${body.slice(0, 4096)}…` : body;
+            this.opts.log(`[conn] unexpected response body=${snippet}`);
+          }
+        });
+      });
+
+      const clearTimers = () => {
+        if (this.hb) {
+          clearInterval(this.hb);
+          this.hb = undefined;
+        }
+        if (this.idleTimer) {
+          clearInterval(this.idleTimer);
+          this.idleTimer = undefined;
+        }
+      };
+
+      const finish = (err?: Error) => {
+        clearTimers();
+        try {
+          onClose.fire(err);
+        } catch (ex) {
+          this.debug(`[conn] error delivering close event: ${String(ex)}`);
+        }
+        try {
+          onEnd.fire();
+        } catch (ex) {
+          this.debug(`[conn] error delivering end event: ${String(ex)}`);
+        }
+      };
+
+      ws.on('open', () => {
+        const rtt = Date.now() - this.startAt;
+        this.metrics.rttMs = rtt;
+        this.lastRxAt = Date.now();
+        this.opts.log(`[conn] open attempt=${this.attempt} rtt=${rtt}ms`);
+
+        this.hb = setInterval(() => {
+          try {
+            ws.ping();
+            this.metrics.lastHeartbeatAt = Date.now();
+          } catch (err) {
+            this.debug(`[conn] ping failed: ${String(err)}`);
+          }
+        }, Math.max(1_000, this.opts.heartbeatIntervalMs));
+
+        this.idleTimer = setInterval(() => {
+          const idleFor = Date.now() - this.lastRxAt;
+          if (idleFor > this.opts.idleTimeoutMs) {
+            this.opts.log(`[conn] idle ${idleFor}ms > ${this.opts.idleTimeoutMs}ms → terminate`);
+            try {
+              ws.terminate();
+            } catch (err) {
+              this.debug(`[conn] terminate failed: ${String(err)}`);
+            }
+          }
+        }, Math.max(1_000, Math.min(this.opts.idleTimeoutMs / 3, 5_000)));
+
+        resolve({
+          onDidReceiveMessage: onRx.event,
+          onDidClose: onClose.event,
+          onDidEnd: onEnd.event,
+          send: (data: Uint8Array) => {
+            try {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(data);
+                this.lastTxAt = Date.now();
+                this.metrics.bytesTx += data.byteLength;
+              }
+            } catch (err) {
+              this.debug(`[conn] send failed: ${String(err)}`);
+            }
+          },
+          end: () => {
+            try {
+              ws.close();
+            } catch (err) {
+              this.debug(`[conn] close failed: ${String(err)}`);
+            }
+          },
+        });
+      });
+
+      ws.on('pong', () => {
+        const now = Date.now();
+        this.metrics.lastHeartbeatAt = now;
+        this.lastRxAt = now;
+      });
+
+      ws.on('message', (data) => {
+        const buf = data instanceof Buffer ? data : Buffer.from(data as ArrayBuffer);
+        this.lastRxAt = Date.now();
+        this.metrics.lastMessageAt = this.lastRxAt;
+        this.metrics.bytesRx += buf.length;
+        if (this.opts.logLevel === 'trace') {
+          const preview = buf.length > 64 ? `${buf.slice(0, 64).toString('hex')}…` : buf.toString('hex');
+          this.debug(`[conn] rx ${buf.length}b ${preview}`);
+        }
+        onRx.fire(buf);
+      });
+
+      ws.on('close', (code, reason) => {
+        this.metrics.lastClose = { code, reason: reason?.toString() };
+        this.opts.log(`[conn] close code=${code} reason=${reason}`);
+        finish();
+      });
+
+      ws.on('error', (err) => {
+        const error = err instanceof Error ? err : new Error(String(err));
+        this.metrics.lastError = error.message;
+        const summary = error?.message ? `${error.message}` : String(error ?? 'unknown error');
+        this.opts.log(`[conn] error ${summary}`);
+        if (ws.readyState === WebSocket.CONNECTING) {
+          clearTimers();
+          reject(error);
+        } else {
+          finish(error);
+        }
+      });
+    });
+  }
+
+  getMetrics(): ConnMetrics {
+    return { ...this.metrics };
+  }
+
+  private debug(message: string) {
+    if (this.opts.logLevel === 'debug' || this.opts.logLevel === 'trace') {
+      this.opts.log(message);
+    }
+  }
+}
+
+
+/Users/carlossanchez/code/sovran/aegis-vscode-remote/extension/src/diagnostics.ts
+import * as vscode from 'vscode';
+import { getSettings } from './config';
+import { ConnectionManager } from './connection';
+import { out } from './ui';
+import { getLastProxyTicketSummary } from './platform';
+
+export function registerDiagnostics(ctx: vscode.ExtensionContext, getConnection: () => ConnectionManager | undefined) {
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand('aegis.showDiagnostics', () => {
+      const settings = getSettings();
+      const metrics = getConnection()?.getMetrics();
+
+      out.show(true);
+      out.appendLine('[diag] settings=' + JSON.stringify(settings));
+      if (metrics) {
+        out.appendLine('[diag] metrics=' + JSON.stringify(metrics));
+      } else {
+        out.appendLine('[diag] metrics=unavailable (no active connection)');
+      }
+      const ticket = getLastProxyTicketSummary();
+      if (ticket) {
+        const redacted = { ...ticket, jti: ticket.jti ? ticket.jti.slice(0, 8) + '…' : undefined };
+        out.appendLine('[diag] ticket=' + JSON.stringify(redacted));
+      }
+      vscode.window.showInformationMessage('Aegis diagnostics sent to output channel.');
+    })
+  );
+}
+
+
+/Users/carlossanchez/code/sovran/aegis-vscode-remote/extension/src/http.ts
+import { Agent, getGlobalDispatcher, setGlobalDispatcher } from 'undici';
+import { promises as fs } from 'fs';
+import type Dispatcher from 'undici/types/dispatcher';
+import type { SecuritySettings } from './config';
+import { out } from './ui';
+
+let originalDispatcher: Dispatcher | undefined;
+let customAgent: Agent | undefined;
+
+async function restoreDefaultDispatcher() {
+  if (customAgent) {
+    try {
+      await customAgent.close();
+    } catch (err) {
+      out.appendLine(`[http] failed to close custom dispatcher: ${String(err)}`);
+    } finally {
+      customAgent = undefined;
+    }
+  }
+  if (originalDispatcher) {
+    setGlobalDispatcher(originalDispatcher);
+  }
+}
+
+export async function configureHttpSecurity(security: SecuritySettings): Promise<void> {
+  if (!originalDispatcher) {
+    originalDispatcher = getGlobalDispatcher();
+  }
+
+  out.appendLine(
+    `[http] applying security settings: rejectUnauthorized=${security.rejectUnauthorized}, caPath=${security.caPath ?? ''}`
+  );
+
+  const connectOptions: Record<string, unknown> = {};
+  let useCustomAgent = false;
+
+  if (security.caPath) {
+    try {
+      const ca = await fs.readFile(security.caPath);
+      if (ca.length > 0) {
+        connectOptions.ca = ca;
+        useCustomAgent = true;
+        out.appendLine(`[http] loaded CA bundle (${security.caPath}) length=${ca.length}`);
+      } else {
+        out.appendLine(`[http] WARNING: CA bundle at ${security.caPath} was empty`);
+      }
+    } catch (err) {
+      out.appendLine(`[http] failed to read CA bundle at ${security.caPath}: ${String(err)}`);
+    }
+  }
+
+  if (security.rejectUnauthorized === false) {
+    connectOptions.rejectUnauthorized = false;
+    useCustomAgent = true;
+    out.appendLine('[http] TLS verification disabled for HTTP requests');
+  }
+
+  if (!useCustomAgent) {
+    out.appendLine('[http] using default dispatcher (no custom CA or TLS overrides)');
+    await restoreDefaultDispatcher();
+    return;
+  }
+
+  const previousAgent = customAgent;
+  customAgent = new Agent({ connect: connectOptions });
+  setGlobalDispatcher(customAgent);
+  out.appendLine('[http] installed custom undici dispatcher for HTTP requests');
+
+  if (previousAgent && previousAgent !== customAgent) {
+    try {
+      await previousAgent.close();
+    } catch (err) {
+      out.appendLine(`[http] failed to close previous dispatcher: ${String(err)}`);
+    }
+  }
+}
+
+export async function disposeHttpSecurity(): Promise<void> {
+  await restoreDefaultDispatcher();
+}
+
+export function getHttpDispatcher(): Dispatcher | undefined {
+  return customAgent;
+}
+
+
+/Users/carlossanchez/code/sovran/aegis-vscode-remote/extension/src/platform.ts
+import * as grpc from '@grpc/grpc-js';
+import * as protoLoader from '@grpc/proto-loader';
+import * as vscode from 'vscode';
+import * as path from 'path';
+import { promises as fs } from 'fs';
+import { getSettings, AegisSettings } from './config';
+import { getSessionUser, requireSession } from './auth';
+import { out } from './ui';
+
+interface WorkspaceMessage {
+  id: string;
+  name: string;
+  cluster?: string;
+  dns?: string;
+  profile?: string;
+  persona?: string;
+}
+
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  cluster?: string;
+  dns?: string;
+  profile?: string;
+  persona?: string;
+}
+
+export interface ProxyTicket {
+  proxyUrl: string;
+  jwt: string;
+  ttlSeconds: number;
+  caPem?: string;
+  certPem?: string;
+  keyPem?: string;
+  serverName?: string;
+  jti?: string;
+  dest?: string;
+  dns?: string[];
+  groups?: string[];
+}
+
+export interface ProxyTicketSummary {
+  proxyUrl: string;
+  expiresAt?: string;
+  hasClientCert: boolean;
+  jti?: string;
+  dest?: string;
+  serverName?: string;
+}
+
+let lastTicketSummary: ProxyTicketSummary | undefined;
+
+export function getLastProxyTicketSummary(): ProxyTicketSummary | undefined {
+  return lastTicketSummary;
+}
+
+type PlatformClientGrpc = grpc.Client & {
+  ListWorkloads(
+    request: { project_id?: string },
+    metadata: grpc.Metadata,
+    callback: (
+      err: grpc.ServiceError | null,
+      response: { items?: any[] }
+    ) => void
+  ): void;
+  CreateConnectionSession(
+    request: { workload_id: string; client: string },
+    metadata: grpc.Metadata,
+    callback: (
+      err: grpc.ServiceError | null,
+      response: {
+        session_id?: string;
+        token?: string;
+        proxy_url?: string;
+        ssh_user?: string;
+        ssh_host_alias?: string;
+        expires_at_utc?: string;
+        ssh_config?: string;
+        one_time?: boolean;
+        jti?: string;
+      }
+    ) => void
+  ): void;
+};
+
+class PlatformClient {
+  private client: PlatformClientGrpc | undefined;
+  private settings: AegisSettings | undefined;
+  private readonly protoPath: string;
+  private cleanup?: () => void;
+
+  constructor(private readonly context: vscode.ExtensionContext) {
+    this.protoPath = path.join(context.extensionPath, 'proto', 'aegis_platform.proto');
+  }
+
+  async initialize() {
+    await this.ensureClients();
+  }
+
+  async refreshSettings() {
+    this.disposeClients();
+    await this.ensureClients();
+  }
+
+  disposeClients() {
+    if (this.client) {
+      this.client.close();
+    }
+    this.client = undefined;
+  }
+
+  private async ensureClients() {
+    const settings = getSettings();
+    this.settings = settings;
+
+    const endpoint = this.normalizeEndpoint(settings.platform.grpcEndpoint);
+    if (!endpoint) {
+      this.disposeClients();
+      return;
+    }
+
+    const packageDefinition = await protoLoader.load(this.protoPath, {
+      keepCase: true,
+      longs: String,
+      enums: String,
+      defaults: false,
+      oneofs: true,
+    });
+    const loaded = grpc.loadPackageDefinition(packageDefinition) as any;
+    const namespace = loaded.aegis?.v1;
+    if (!namespace) {
+      throw new Error('Failed to load platform proto definitions.');
+    }
+
+    const tlsCreds = await this.buildChannelCredentials(endpoint, settings);
+    const clientOptions: grpc.ClientOptions = {
+      'grpc.max_receive_message_length': 10 * 1024 * 1024,
+    };
+
+    const serviceDef = namespace.AegisPlatform ?? namespace.AegisPlatformService ?? namespace.PlatformService;
+    if (typeof serviceDef !== 'function') {
+      throw new Error('AegisPlatform service constructor not found in loaded proto definition');
+    }
+    this.client = new serviceDef(endpoint, tlsCreds, clientOptions) as PlatformClientGrpc;
+  }
+
+  private async buildChannelCredentials(endpoint: string, settings: AegisSettings): Promise<grpc.ChannelCredentials> {
+    const { security } = settings;
+
+    if (endpoint.startsWith('localhost') || endpoint.startsWith('127.0.0.1') || endpoint.startsWith('[::1]')) {
+      out.appendLine('[platform] creating insecure gRPC client for local development');
+      return grpc.credentials.createInsecure();
+    }
+
+    if (security.rejectUnauthorized === false) {
+      out.appendLine('[platform] creating insecure gRPC client (TLS verification disabled by settings)');
+      return grpc.credentials.createInsecure();
+    }
+
+    let ca: Buffer | undefined;
+    if (security.caPath) {
+      try {
+        ca = await fs.readFile(security.caPath);
+      } catch (err) {
+        out.appendLine(`[platform] failed to read CA bundle at ${security.caPath}: ${String(err)}`);
+      }
+    }
+    out.appendLine('[platform] creating secure gRPC client');
+    if (ca) {
+      out.appendLine(`[platform] loaded CA bundle (${security.caPath}) length=${ca.length}`);
+    } else if (security.caPath) {
+      out.appendLine(`[platform] WARNING: no CA loaded from ${security.caPath}`);
+    }
+    return grpc.credentials.createSsl(ca);
+  }
+
+  private ensureSettingsPresent() {
+    const endpoint = this.normalizeEndpoint(this.settings?.platform.grpcEndpoint ?? '');
+    if (!endpoint) {
+      throw new Error('Configure "aegisRemote.platform.grpcEndpoint" in settings.');
+    }
+  }
+
+  private normalizeEndpoint(raw: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    if (trimmed.endsWith('[')) {
+      const sanitized = trimmed.slice(0, -1);
+      out.appendLine(`[platform] normalized gRPC endpoint from "${trimmed}" to "${sanitized}"`);
+      return sanitized;
+    }
+
+    return trimmed;
+  }
+
+  async listWorkspaces(): Promise<WorkspaceSummary[]> {
+    this.ensureSettingsPresent();
+    await this.ensureClients();
+    if (!this.client) {
+      return [];
+    }
+    const session = await requireSession(true);
+    if (!session) {
+      throw new Error('Aegis sign-in required.');
+    }
+    const projectId = this.settings?.platform.projectId?.trim();
+    if (!projectId) {
+      throw new Error('Configure "aegisRemote.platform.projectId" in settings.');
+    }
+
+    const metadata = this.buildMetadata(session);
+    return new Promise<WorkspaceSummary[]>((resolve, reject) => {
+      this.client!.ListWorkloads({ project_id: projectId }, metadata, (err, response) => {
+        if (err) {
+          if ((err as grpc.ServiceError)?.code === grpc.status.NOT_FOUND) {
+            out.appendLine(`[platform] project ${projectId} not found; treating as empty workspace list`);
+            resolve([]);
+            return;
+          }
+          reject(err);
+          return;
+        }
+        const workspaces = (response?.items ?? []).map((item: any) => {
+          const ws = item?.workspace;
+          return {
+            id: item?.id ?? '',
+            name: item?.id ?? 'workspace',
+            cluster: item?.cluster_id,
+            dns: ws?.env?.DNS,
+            profile: ws?.profile ?? undefined,
+            persona: ws?.persona ?? undefined,
+          } as WorkspaceSummary;
+        }).filter((ws) => ws.id);
+        resolve(workspaces);
+      });
+    });
+  }
+
+  async issueProxyTicket(wid: string): Promise<ProxyTicket> {
+    this.ensureSettingsPresent();
+    await this.ensureClients();
+    if (!this.client) {
+      throw new Error('Platform gRPC client not initialized.');
+    }
+    const session = await requireSession(true);
+    if (!session) {
+      throw new Error('Aegis sign-in required.');
+    }
+
+    const metadata = this.buildMetadata(session);
+    return new Promise<ProxyTicket>((resolve, reject) => {
+      this.client!.CreateConnectionSession({ workload_id: wid, client: 'vscode' }, metadata, (err, response) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        if (!response?.proxy_url || !response.token) {
+          reject(new Error('Platform returned an incomplete proxy ticket.'));
+          return;
+        }
+        const ticket: ProxyTicket = {
+          proxyUrl: response.proxy_url,
+          jwt: response.token,
+          ttlSeconds: 0,
+          caPem: undefined,
+          certPem: undefined,
+          keyPem: undefined,
+          serverName: undefined,
+          jti: response.jti,
+          dest: undefined,
+          dns: undefined,
+          groups: undefined,
+        };
+        const expiresAt = response.expires_at_utc ? response.expires_at_utc : undefined;
+        lastTicketSummary = {
+          proxyUrl: ticket.proxyUrl,
+          expiresAt,
+          hasClientCert: false,
+          jti: ticket.jti,
+          dest: ticket.dest,
+          serverName: ticket.serverName,
+        };
+        resolve(ticket);
+      });
+    });
+  }
+
+  private buildMetadata(session: vscode.AuthenticationSession): grpc.Metadata {
+    const metadata = new grpc.Metadata();
+    metadata.add('authorization', `Bearer ${session.accessToken}`);
+    if (this.settings?.platform.namespace) {
+      metadata.add('x-aegis-namespace', this.settings.platform.namespace);
+    }
+    return metadata;
+  }
+}
+
+let clientInstance: PlatformClient | undefined;
+
+export function getPlatformClient(): PlatformClient {
+  if (!clientInstance) {
+    throw new Error('Platform client not initialized yet.');
+  }
+  return clientInstance;
+}
+
+export async function initializePlatform(context: vscode.ExtensionContext) {
+  if (!clientInstance) {
+    clientInstance = new PlatformClient(context);
+  }
+  await clientInstance.initialize();
+}
+
+export async function refreshPlatformSettings() {
+  if (clientInstance) {
+    await clientInstance.refreshSettings();
+  }
+}
+
+export async function listWorkspaces(): Promise<WorkspaceSummary[]> {
+  return getPlatformClient().listWorkspaces();
+}
+
+export async function issueProxyTicket(wid: string): Promise<ProxyTicket> {
+  return getPlatformClient().issueProxyTicket(wid);
+}
+
+
+/Users/carlossanchez/code/sovran/aegis-vscode-remote/extension/src/resolver.ts
+/// <reference path="../vscode.proposed.resolvers.d.ts" />
+/// <reference path="../vscode.proposed.tunnels.d.ts" />
+
+import * as vscode from 'vscode';
+import { promises as fs } from 'fs';
+import { out, status } from './ui';
+import { getSettings } from './config';
+import { ConnectionManager } from './connection';
+import { issueProxyTicket } from './platform';
+
+let lastConnection: ConnectionManager | undefined;
+let lastEnd: (() => void) | undefined;
+let renewalTimer: NodeJS.Timeout | undefined;
+
+export function getLastConnection(): ConnectionManager | undefined {
+  return lastConnection;
+}
+
+export function forceReconnect() {
+  if (lastEnd) {
+    try {
+      lastEnd();
+    } finally {
+      lastEnd = undefined;
+    }
+  }
+}
+
+export const AegisResolver: vscode.RemoteAuthorityResolver = {
+  async resolve(authority: string, context: vscode.RemoteAuthorityResolverContext): Promise<vscode.ResolverResult> {
+    const settings = getSettings();
+    const widFromAuthority = (authority.split('+')[1] || '').trim();
+    const wid = widFromAuthority || settings.defaultWorkspaceId;
+    if (!wid) {
+      throw new Error('Workspace id not provided.');
+    }
+
+    out.appendLine(`[resolver] resolve(${authority}) attempt=${context.resolveAttempt}`);
+    const widLabel = `workspace ${wid}`;
+    status.set(`$(sync~spin) Aegis: Connecting ${widLabel}…`);
+
+    if (renewalTimer) {
+      clearTimeout(renewalTimer);
+      renewalTimer = undefined;
+    }
+
+    const managed = new vscode.ManagedResolvedAuthority(async () => {
+      try {
+        // Get a fresh ticket for each connection attempt (tokens are one-time use)
+        const ticket = await issueProxyTicket(wid);
+        const url = buildWebSocketUrl(ticket.proxyUrl, wid);
+        out.appendLine(`[resolver] got ticket for ${wid}, url=${url}`);
+
+        const caBuffers: Buffer[] = [];
+        if (ticket.caPem) {
+          caBuffers.push(Buffer.from(ticket.caPem));
+        }
+        if (settings.security.caPath) {
+          try {
+            const fileCa = await fs.readFile(settings.security.caPath);
+            caBuffers.push(fileCa);
+          } catch (err) {
+            out.appendLine(`[resolver] failed to read CA bundle: ${String(err)}`);
+          }
+        }
+
+        const tlsOptions = {
+          ca: caBuffers.length === 0 ? undefined : caBuffers.length === 1 ? caBuffers[0] : caBuffers,
+          cert: ticket.certPem ? Buffer.from(ticket.certPem) : undefined,
+          key: ticket.keyPem ? Buffer.from(ticket.keyPem) : undefined,
+          servername: ticket.serverName,
+        };
+
+        const connection = new ConnectionManager(url, {
+          heartbeatIntervalMs: settings.heartbeatIntervalMs,
+          idleTimeoutMs: settings.idleTimeoutMs,
+          logLevel: settings.logLevel,
+          log: (message) => out.appendLine(message),
+          headers: { Authorization: `Bearer ${ticket.jwt}` },
+          tls: tlsOptions,
+          rejectUnauthorized: settings.security.rejectUnauthorized,
+        });
+        lastConnection = connection;
+
+        const transport = await connection.open();
+        status.set(`$(plug) Aegis: Connected ${widLabel}`, url);
+        transport.onDidClose(() => status.set(`$(debug-disconnect) Aegis: Disconnected ${widLabel}`, url));
+        transport.onDidEnd(() => status.set(`$(debug-disconnect) Aegis: Disconnected ${widLabel}`, url));
+        lastEnd = () => transport.end();
+        transport.onDidEnd(() => {
+          if (lastEnd === transport.end) {
+            lastEnd = undefined;
+          }
+          if (renewalTimer) {
+            clearTimeout(renewalTimer);
+            renewalTimer = undefined;
+          }
+        });
+        if (ticket.ttlSeconds > 0) {
+          const renewMs = Math.max(5_000, Math.floor(ticket.ttlSeconds * 1000 * 0.85));
+          renewalTimer = setTimeout(() => {
+            out.appendLine(`[resolver] renewing ticket for workspace ${wid}`);
+            forceReconnect();
+          }, renewMs);
+        }
+        return transport;
+      } catch (err) {
+        status.set(`$(warning) Aegis: Connection failed ${widLabel}`, String(err));
+        throw err;
+      }
+    }, 'hello');
+
+    return {
+      ...managed,
+      extensionHostEnv: { AEGIS_WID: wid, AEGIS_TUNNEL: 'wss' },
+    };
+  }
+};
+
+function buildWebSocketUrl(rawProxyUrl: string, wid: string): string {
+  if (!rawProxyUrl) {
+    throw new Error('Proxy URL missing from ticket.');
+  }
+
+  const trimmed = rawProxyUrl.trim();
+  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed);
+  const candidate = hasScheme ? trimmed : `https://${trimmed}`;
+
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch (err) {
+    throw new Error(`Invalid proxy URL from ticket: ${trimmed}`);
+  }
+
+  const encodedWid = encodeURIComponent(wid);
+  const suffix = `/proxy/${encodedWid}`;
+  const pathSansTrailingSlash = url.pathname.replace(/\/+$/, '');
+
+  const alreadyHasSuffix = pathSansTrailingSlash === suffix
+    || pathSansTrailingSlash === `/proxy/${wid}`
+    || pathSansTrailingSlash.endsWith(`/proxy/${encodedWid}`)
+    || pathSansTrailingSlash.endsWith(`/proxy/${wid}`);
+
+  if (!alreadyHasSuffix) {
+    if (pathSansTrailingSlash === '' || pathSansTrailingSlash === '/') {
+      url.pathname = suffix;
+    } else if (pathSansTrailingSlash === '/proxy') {
+      url.pathname = suffix;
+    } else if (pathSansTrailingSlash.endsWith('/proxy')) {
+      url.pathname = `${pathSansTrailingSlash}/${encodedWid}`;
+    } else if (pathSansTrailingSlash.includes('/proxy/')) {
+      // Ticket specifies a proxy path already; trust it as-is.
+      url.pathname = pathSansTrailingSlash;
+    } else {
+      const base = pathSansTrailingSlash.startsWith('/') ? pathSansTrailingSlash : `/${pathSansTrailingSlash}`;
+      url.pathname = `${base}${suffix}`;
+    }
+  } else {
+    url.pathname = pathSansTrailingSlash || suffix;
+  }
+
+  switch (url.protocol) {
+    case 'ws:':
+    case 'wss:':
+      url.protocol = 'wss:';
+      break;
+    case 'http:':
+    case 'https:':
+    default:
+      url.protocol = 'wss:';
+      break;
+  }
+
+  return url.toString();
+}
+
+
+/Users/carlossanchez/code/sovran/aegis-vscode-remote/extension/src/ui.ts
+import * as vscode from 'vscode';
+import { listWorkspaces, WorkspaceSummary } from './platform';
+
+export const out = vscode.window.createOutputChannel('Aegis Remote');
+
+export class Status {
+  private item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  set(text: string, tooltip?: string) { this.item.text = text; this.item.tooltip = tooltip; this.item.show(); }
+}
+export const status = new Status();
+
+class WorkspaceTreeItem extends vscode.TreeItem {
+  constructor(public readonly workspace: WorkspaceSummary) {
+    super(workspace.name ?? workspace.id, vscode.TreeItemCollapsibleState.None);
+    this.contextValue = 'workspace';
+    const descriptionParts: string[] = [];
+    if (workspace.cluster) descriptionParts.push(workspace.cluster);
+    if (workspace.dns) descriptionParts.push(workspace.dns);
+    if (workspace.profile) descriptionParts.push(`profile: ${workspace.profile}`);
+    this.description = descriptionParts.join(' · ') || undefined;
+    this.command = {
+      command: 'aegis.connect',
+      title: 'Connect',
+      arguments: [workspace.id],
+    };
+  }
+}
+
+export class WorkspacesProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
+  private readonly onDidChangeEmitter = new vscode.EventEmitter<void>();
+  readonly onDidChangeTreeData = this.onDidChangeEmitter.event;
+
+  private loading = false;
+  private loadedOnce = false;
+  private lastError: unknown;
+  private items: vscode.TreeItem[] = [];
+
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
+  dispose() {
+    this.onDidChangeEmitter.dispose();
+  }
+
+  refresh() {
+    this.loadedOnce = false;
+    this.onDidChangeEmitter.fire();
+  }
+
+  getTreeItem(element: vscode.TreeItem): vscode.TreeItem | Thenable<vscode.TreeItem> {
+    return element;
+  }
+
+  async getChildren(): Promise<vscode.TreeItem[]> {
+    if (this.loading) {
+      return [this.createInfoItem('Loading workspaces…')];
+    }
+    if (!this.loadedOnce) {
+      await this.load();
+    }
+    if (this.items.length > 0) {
+      return this.items;
+    }
+    if (this.lastError) {
+      return [this.createErrorItem(this.lastError)];
+    }
+    return [this.createInfoItem('No workspaces available')];
+  }
+
+  private async load() {
+    this.loading = true;
+    this.onDidChangeEmitter.fire();
+    try {
+      const workspaces = await listWorkspaces();
+      this.items = workspaces.map((ws) => new WorkspaceTreeItem(ws));
+      this.lastError = undefined;
+    } catch (err) {
+      this.lastError = err;
+      this.items = [];
+      out.appendLine(`[ui] failed to load workspaces: ${String(err)}`);
+    } finally {
+      this.loading = false;
+      this.loadedOnce = true;
+      this.onDidChangeEmitter.fire();
+    }
+  }
+
+  private createInfoItem(text: string): vscode.TreeItem {
+    const item = new vscode.TreeItem(text, vscode.TreeItemCollapsibleState.None);
+    item.contextValue = 'info';
+    item.iconPath = new vscode.ThemeIcon('info');
+    return item;
+  }
+
+  private createErrorItem(error: unknown): vscode.TreeItem {
+    const message = this.describeError(error);
+    if (message === 'Aegis sign-in required.') {
+      const item = new vscode.TreeItem('Sign in to Aegis…', vscode.TreeItemCollapsibleState.None);
+      item.contextValue = 'auth';
+      item.iconPath = new vscode.ThemeIcon('key');
+      item.command = { command: 'aegis.signIn', title: 'Sign In' };
+      return item;
+    }
+    if (/Configure/.test(message)) {
+      const item = new vscode.TreeItem(message, vscode.TreeItemCollapsibleState.None);
+      item.contextValue = 'settings';
+      item.iconPath = new vscode.ThemeIcon('gear');
+      item.command = {
+        command: 'workbench.action.openSettings',
+        title: 'Open Settings',
+        arguments: ['aegisRemote.platform.grpcEndpoint'],
+      };
+      return item;
+    }
+    const item = new vscode.TreeItem(message, vscode.TreeItemCollapsibleState.None);
+    item.contextValue = 'error';
+    item.iconPath = new vscode.ThemeIcon('error');
+    return item;
+  }
+
+  private describeError(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return typeof error === 'string' ? error : 'Unable to load workspaces';
+  }
+}
+
+
+/Users/carlossanchez/code/sovran/aegis-vscode-remote/extension/proto/aegis_platform.proto
+syntax = "proto3";
+package aegis.v1;
+option go_package = "github.com/yourorg/aegis/proto/aegis/v1;aegisv1";
+
+import "google/protobuf/empty.proto";
+
+// ---- Core resource messages ----
+message Project { string id = 1; string display_name = 2; string owner_group = 3; PolicyDomain policy = 4; }
+message PolicyDomain { repeated string regions = 1; string data_level = 2; bool deny_egress_by_default = 3; }
+
+message Budget {
+  string project_id = 1;
+  string queue = 2;
+  double limit_usd = 3;
+  string policy_mode = 4;
+}
+
+message Flavor {
+  string name = 1;
+  string chip = 2;
+  string mig_profile = 3;
+  bool rdma_required = 4;
+  string resource_name = 5;
+  int32 gpu_count = 6;
+  double memory_gib = 7;
+  double price_usd_per_gpu_hour = 8;
+  string cpu_cores_request = 9;
+  string memory_request = 10;
+}
+
+message Queue {
+  string name = 1; string project_id = 2; string priority_tier = 3;
+  repeated string allowed_flavors = 4;
+  int64 default_max_duration_seconds = 5;
+}
+
+// Workload
+message WorkspaceSpec {
+  string flavor = 1;
+  string image = 2;
+  map<string,string> env = 3;
+  repeated string command = 4;
+  int64 max_duration_seconds = 5;
+  bool interactive = 6;
+  repeated int32 ports = 7;
+  string profile = 8;
+  string persona = 9;
+}
+message TrainingSpec  { string flavor = 1; int32 workers = 2; int32 gpus_per_worker = 3; string image = 4; repeated string command = 5; bool gang = 6; int64 max_duration_seconds = 7; }
+
+message ResourceHints {
+  string resource_name = 1;
+  int32 gpu_count = 2;
+  string cpu_cores_request = 3;
+  string memory_request = 4;
+}
+
+message Workload {
+  string id = 1; string project_id = 2; string queue = 3; string cluster_id = 4; string status = 5; string url = 6;
+  oneof kind { WorkspaceSpec workspace = 10; TrainingSpec training = 11; }
+  ResourceHints hints = 12;
+  string ui_status = 13;
+  string message = 14;
+}
+
+message GetWorkspaceConnectionDetailsRequest {
+  string id = 1;
+}
+
+message GetWorkspaceConnectionDetailsResponse {
+  string proxy_url = 1;
+  string token = 2;
+  string ssh_host_alias = 3;
+  string ssh_username = 4;
+  string internal_host = 5;
+  int32 dest_port = 6;
+  string expires_at_utc = 7;
+}
+
+message CreateConnectionSessionRequest {
+  string workload_id = 1;
+  string client = 2;
+}
+
+message ConnectionSession {
+  string session_id = 1;
+  string token = 2;
+  string ssh_user = 3;
+  string ssh_host_alias = 4;
+  string vscode_uri = 5;
+  string ssh_config = 6;
+  string proxy_url = 7;
+  string expires_at_utc = 8;
+  bool one_time = 9;
+}
+
+message RenewConnectionSessionRequest {
+  string session_id = 1;
+}
+
+message RevokeConnectionSessionRequest {
+  string session_id = 1;
+}
+
+message ClusterRegisterRequest { string cluster_id = 1; string provider = 2; string region = 3; string il_level = 4; map<string,string> labels = 5; }
+message ClusterRegisterResponse { bool ok = 1; string message = 2; }
+message ClusterHeartbeat { string cluster_id = 1; double ttf_gpu_seconds_p50 = 2; repeated Flavor available_flavors = 3; }
+message ClusterHeartbeatAck { bool ok = 1; }
+
+message CreateProjectRequest { Project project = 1; }
+message UpsertBudgetRequest { Budget budget = 1; }
+message UpsertFlavorRequest { Flavor flavor = 1; }
+message UpsertQueueRequest  { Queue queue = 1; }
+message SubmitWorkloadRequest { Workload workload = 1; }
+message GetWorkloadRequest { string id = 1; }
+message ListWorkloadsRequest { string project_id = 1; }
+message ListWorkloadsResponse { repeated Workload items = 1; }
+
+message LeaseWorkloadRequest {
+  string cluster_id = 1;
+  int32 max = 2;
+}
+
+message LeaseWorkloadResponse {
+  repeated Workload items = 1;
+}
+
+message AckWorkloadRequest {
+  string id = 1;
+  string status = 2;
+  string url = 3;
+  string backend = 4;
+}
+
+message AckWorkloadResponse {
+  Workload workload = 1;
+}
+
+message StartWorkloadRequest {
+  string id = 1;
+  string cluster_id = 2;
+}
+
+message StartWorkloadResponse {
+  Workload workload = 1;
+}
+
+message GetBudgetRequest { string project_id = 1; string queue = 2; }
+message BudgetUsage {
+  double actual_usd = 1;
+  double reserved_usd = 2;
+  double remaining_usd = 3;
+  string period_start_utc = 4;
+  string period_end_utc = 5;
+}
+message GetBudgetResponse { Budget budget = 1; BudgetUsage usage = 2; }
+
+message ListBudgetsRequest { string project_id = 1; }
+message BudgetWithUsage { Budget budget = 1; BudgetUsage usage = 2; }
+message ListBudgetsResponse { repeated BudgetWithUsage items = 1; }
+
+service AegisPlatform {
+  rpc CreateProject(CreateProjectRequest) returns (Project);
+  rpc UpsertBudget(UpsertBudgetRequest) returns (Budget);
+  rpc GetBudget(GetBudgetRequest) returns (GetBudgetResponse);
+  rpc ListBudgets(ListBudgetsRequest) returns (ListBudgetsResponse);
+  rpc UpsertFlavor(UpsertFlavorRequest) returns (Flavor);
+  rpc UpsertQueue(UpsertQueueRequest) returns (Queue);
+
+  rpc SubmitWorkload(SubmitWorkloadRequest) returns (Workload);
+  rpc GetWorkload(GetWorkloadRequest) returns (Workload);
+  rpc ListWorkloads(ListWorkloadsRequest) returns (ListWorkloadsResponse);
+
+  rpc GetWorkspaceConnectionDetails(GetWorkspaceConnectionDetailsRequest) returns (GetWorkspaceConnectionDetailsResponse);
+
+  rpc CreateConnectionSession(CreateConnectionSessionRequest) returns (ConnectionSession);
+  rpc RenewConnectionSession(RenewConnectionSessionRequest) returns (ConnectionSession);
+  rpc RevokeConnectionSession(RevokeConnectionSessionRequest) returns (google.protobuf.Empty);
+
+  rpc LeaseWorkload(LeaseWorkloadRequest) returns (LeaseWorkloadResponse);
+  rpc StartWorkload(StartWorkloadRequest) returns (StartWorkloadResponse);
+  rpc AckWorkload(AckWorkloadRequest) returns (AckWorkloadResponse);
+
+  rpc RegisterCluster(ClusterRegisterRequest) returns (ClusterRegisterResponse);
+  rpc Heartbeat(ClusterHeartbeat) returns (ClusterHeartbeatAck);
+}

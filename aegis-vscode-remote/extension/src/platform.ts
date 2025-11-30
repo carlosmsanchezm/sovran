@@ -12,6 +12,8 @@ interface WorkspaceMessage {
   name: string;
   cluster?: string;
   dns?: string;
+  profile?: string;
+  persona?: string;
 }
 
 export interface WorkspaceSummary {
@@ -19,6 +21,8 @@ export interface WorkspaceSummary {
   name: string;
   cluster?: string;
   dns?: string;
+  profile?: string;
+  persona?: string;
 }
 
 export interface ProxyTicket {
@@ -226,6 +230,8 @@ class PlatformClient {
             name: item?.id ?? 'workspace',
             cluster: item?.cluster_id,
             dns: ws?.env?.DNS,
+            profile: ws?.profile ?? undefined,
+            persona: ws?.persona ?? undefined,
           } as WorkspaceSummary;
         }).filter((ws) => ws.id);
         resolve(workspaces);
