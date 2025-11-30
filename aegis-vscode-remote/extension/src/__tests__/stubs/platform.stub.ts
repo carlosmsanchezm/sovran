@@ -1,3 +1,5 @@
+import { jest } from '@jest/globals';
+
 export type Ticket = {
   proxyUrl: string;
   jwt: string;
@@ -7,6 +9,17 @@ export type Ticket = {
   serverName?: string;
   ttlSeconds: number;
 };
+
+export type WorkspaceSummary = {
+  id: string;
+  name: string;
+  cluster?: string;
+  dns?: string;
+  profile?: string;
+  persona?: string;
+};
+
+export const listWorkspaces = jest.fn(async (): Promise<WorkspaceSummary[]> => []);
 
 export async function initializePlatform() {}
 export async function refreshPlatformSettings() {}
