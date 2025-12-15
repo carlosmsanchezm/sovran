@@ -17,6 +17,8 @@ export type WorkspaceSummary = {
   dns?: string;
   profile?: string;
   persona?: string;
+  status?: string;
+  uiStatus?: string;
 };
 
 export const listWorkspaces = jest.fn(async (): Promise<WorkspaceSummary[]> => []);
