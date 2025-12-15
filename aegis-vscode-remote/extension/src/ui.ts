@@ -32,6 +32,62 @@ export function getConnectedWorkspaceId(): string | undefined {
   return undefined;
 }
 
+/**
+ * Returns the appropriate icon and color for a workload status.
+ */
+function getStatusIcon(status?: string): vscode.ThemeIcon {
+  const normalizedStatus = (status ?? '').toUpperCase();
+  switch (normalizedStatus) {
+    case 'RUNNING':
+    case 'READY':
+      return new vscode.ThemeIcon('vm-running', new vscode.ThemeColor('charts.green'));
+    case 'FAILED':
+    case 'ERROR':
+      return new vscode.ThemeIcon('error', new vscode.ThemeColor('charts.red'));
+    case 'PENDING':
+    case 'PLACED':
+    case 'STARTING':
+    case 'QUEUED':
+      return new vscode.ThemeIcon('sync~spin', new vscode.ThemeColor('charts.yellow'));
+    case 'STOPPED':
+    case 'TERMINATED':
+      return new vscode.ThemeIcon('debug-stop', new vscode.ThemeColor('charts.gray'));
+    default:
+      return new vscode.ThemeIcon('vm-outline');
+  }
+}
+
+/**
+ * Returns a human-readable status label.
+ */
+function getStatusLabel(status?: string): string {
+  const normalizedStatus = (status ?? '').toUpperCase();
+  switch (normalizedStatus) {
+    case 'RUNNING':
+      return 'Running';
+    case 'READY':
+      return 'Ready';
+    case 'FAILED':
+      return 'Failed';
+    case 'ERROR':
+      return 'Error';
+    case 'PENDING':
+      return 'Pending';
+    case 'PLACED':
+      return 'Placed';
+    case 'STARTING':
+      return 'Starting';
+    case 'QUEUED':
+      return 'Queued';
+    case 'STOPPED':
+      return 'Stopped';
+    case 'TERMINATED':
+      return 'Terminated';
+    default:
+      return status || 'Unknown';
+  }
+}
+
 class WorkspaceTreeItem extends vscode.TreeItem {
   constructor(public readonly workspace: WorkspaceSummary, isConnected: boolean) {
     super(workspace.name ?? workspace.id, vscode.TreeItemCollapsibleState.None);
@@ -43,17 +99,27 @@ class WorkspaceTreeItem extends vscode.TreeItem {
       // Don't set command - already connected
     } else {
       this.contextValue = 'workspace';
-      this.iconPath = new vscode.ThemeIcon('vm-outline');
+      // Use status-based icon
+      this.iconPath = getStatusIcon(workspace.status);
+
       const descriptionParts: string[] = [];
+      // Add status label first
+      if (workspace.status) {
+        descriptionParts.push(getStatusLabel(workspace.status));
+      }
       if (workspace.cluster) descriptionParts.push(workspace.cluster);
-      if (workspace.dns) descriptionParts.push(workspace.dns);
-      if (workspace.profile) descriptionParts.push(`profile: ${workspace.profile}`);
+      if (workspace.profile) descriptionParts.push(workspace.profile);
       this.description = descriptionParts.join(' · ') || undefined;
-      this.command = {
-        command: 'aegis.connect',
-        title: 'Connect',
-        arguments: [workspace.id],
-      };
+
+      // Only allow connect for running/ready workloads
+      const canConnect = ['RUNNING', 'READY'].includes((workspace.status ?? '').toUpperCase());
+      if (canConnect) {
+        this.command = {
+          command: 'aegis.connect',
+          title: 'Connect',
+          arguments: [workspace.id],
+        };
+      }
     }
   }
 }

@@ -2,6 +2,7 @@ import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { getGrpcTargetOverrides } from './grpc-target';
 import { getSettings, AegisSettings } from './config';
 import { getSessionUser, requireSession } from './auth';
 import { out } from './ui';
@@ -23,6 +24,8 @@ export interface WorkspaceSummary {
   dns?: string;
   profile?: string;
   persona?: string;
+  status?: string;
+  uiStatus?: string;
 }
 
 export interface ProxyTicket {
@@ -134,12 +137,19 @@ class PlatformClient {
     }
 
     const tlsCreds = await this.buildChannelCredentials(endpoint, settings);
+    const targetOverrides = getGrpcTargetOverrides(endpoint);
     const clientOptions: grpc.ClientOptions = {
       'grpc.max_receive_message_length': 10 * 1024 * 1024,
-      'grpc.ssl_target_name_override': endpoint.split(':')[0], // Use hostname for TLS verification
-      'grpc.default_authority': endpoint.split(':')[0],
     };
-    out.appendLine(`[platform] gRPC client options: ssl_target_name_override=${endpoint.split(':')[0]}`);
+    if (targetOverrides) {
+      clientOptions['grpc.ssl_target_name_override'] = targetOverrides.sslTargetNameOverride; // Use hostname for TLS verification
+      clientOptions['grpc.default_authority'] = targetOverrides.defaultAuthority;
+      out.appendLine(
+        `[platform] gRPC client options: ssl_target_name_override=${targetOverrides.sslTargetNameOverride} default_authority=${targetOverrides.defaultAuthority}`
+      );
+    } else {
+      out.appendLine('[platform] gRPC client options: ssl_target_name_override not set (unparseable endpoint hostname)');
+    }
 
     const serviceDef = namespace.AegisPlatform ?? namespace.AegisPlatformService ?? namespace.PlatformService;
     if (typeof serviceDef !== 'function') {
@@ -233,6 +243,8 @@ class PlatformClient {
             dns: ws?.env?.DNS,
             profile: ws?.profile ?? undefined,
             persona: ws?.persona ?? undefined,
+            status: item?.status ?? undefined,
+            uiStatus: item?.ui_status ?? undefined,
           } as WorkspaceSummary;
         }).filter((ws) => ws.id);
         resolve(workspaces);
