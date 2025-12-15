@@ -46,6 +46,7 @@ export const AegisResolver: vscode.RemoteAuthorityResolver = {
 
     const managed = new vscode.ManagedResolvedAuthority(async () => {
       try {
+        out.appendLine(`[resolver] makeConnection callback starting for ${wid}`);
         // Get a fresh ticket for each connection attempt (tokens are one-time use)
         const ticket = await issueProxyTicket(wid);
         const url = buildWebSocketUrl(ticket.proxyUrl, wid);
@@ -105,7 +106,12 @@ export const AegisResolver: vscode.RemoteAuthorityResolver = {
         }
         return transport;
       } catch (err) {
-        status.set(`$(warning) Aegis: Connection failed ${widLabel}`, String(err));
+        const errMsg = err instanceof Error ? err.message : String(err);
+        out.appendLine(`[resolver] connection failed for ${wid}: ${errMsg}`);
+        if (err instanceof Error && err.stack) {
+          out.appendLine(`[resolver] stack: ${err.stack}`);
+        }
+        status.set(`$(warning) Aegis: Connection failed ${widLabel}`, errMsg);
         throw err;
       }
     }, 'hello');

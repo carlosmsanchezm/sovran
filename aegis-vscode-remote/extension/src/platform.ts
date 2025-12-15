@@ -2,10 +2,10 @@ import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { promises as fs } from 'fs';
 import { getSettings, AegisSettings } from './config';
 import { getSessionUser, requireSession } from './auth';
 import { out } from './ui';
+import { loadCombinedCAsBuffer } from './tls';
 
 interface WorkspaceMessage {
   id: string;
@@ -66,6 +66,7 @@ type PlatformClientGrpc = grpc.Client & {
   CreateConnectionSession(
     request: { workload_id: string; client: string },
     metadata: grpc.Metadata,
+    options: grpc.CallOptions,
     callback: (
       err: grpc.ServiceError | null,
       response: {
@@ -80,7 +81,7 @@ type PlatformClientGrpc = grpc.Client & {
         jti?: string;
       }
     ) => void
-  ): void;
+  ): grpc.ClientUnaryCall;
 };
 
 class PlatformClient {
@@ -135,13 +136,23 @@ class PlatformClient {
     const tlsCreds = await this.buildChannelCredentials(endpoint, settings);
     const clientOptions: grpc.ClientOptions = {
       'grpc.max_receive_message_length': 10 * 1024 * 1024,
+      'grpc.ssl_target_name_override': endpoint.split(':')[0], // Use hostname for TLS verification
+      'grpc.default_authority': endpoint.split(':')[0],
     };
+    out.appendLine(`[platform] gRPC client options: ssl_target_name_override=${endpoint.split(':')[0]}`);
 
     const serviceDef = namespace.AegisPlatform ?? namespace.AegisPlatformService ?? namespace.PlatformService;
     if (typeof serviceDef !== 'function') {
       throw new Error('AegisPlatform service constructor not found in loaded proto definition');
     }
     this.client = new serviceDef(endpoint, tlsCreds, clientOptions) as PlatformClientGrpc;
+
+    // Log channel state for debugging
+    const channel = (this.client as any).getChannel?.();
+    if (channel) {
+      const state = channel.getConnectivityState(false);
+      out.appendLine(`[platform] gRPC channel initial state: ${state}`);
+    }
   }
 
   private async buildChannelCredentials(endpoint: string, settings: AegisSettings): Promise<grpc.ChannelCredentials> {
@@ -157,21 +168,11 @@ class PlatformClient {
       return grpc.credentials.createInsecure();
     }
 
-    let ca: Buffer | undefined;
-    if (security.caPath) {
-      try {
-        ca = await fs.readFile(security.caPath);
-      } catch (err) {
-        out.appendLine(`[platform] failed to read CA bundle at ${security.caPath}: ${String(err)}`);
-      }
-    }
+    // Use shared utility to combine system CAs with custom CA
+    // See /docs/infrastructure-reference.md for why this is required
+    const combinedCA = await loadCombinedCAsBuffer(security.caPath);
     out.appendLine('[platform] creating secure gRPC client');
-    if (ca) {
-      out.appendLine(`[platform] loaded CA bundle (${security.caPath}) length=${ca.length}`);
-    } else if (security.caPath) {
-      out.appendLine(`[platform] WARNING: no CA loaded from ${security.caPath}`);
-    }
-    return grpc.credentials.createSsl(ca);
+    return grpc.credentials.createSsl(combinedCA);
   }
 
   private ensureSettingsPresent() {
@@ -245,15 +246,76 @@ class PlatformClient {
     if (!this.client) {
       throw new Error('Platform gRPC client not initialized.');
     }
-    const session = await requireSession(true);
+
+    // First try to get existing session silently (with retry for race conditions)
+    out.appendLine(`[platform] issueProxyTicket(${wid}) - getting session`);
+    let session: vscode.AuthenticationSession | undefined;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        session = await vscode.authentication.getSession('aegis', ['platform'], {
+          createIfNone: false,
+          silent: true,
+        });
+        if (session) {
+          out.appendLine(`[platform] found existing session for ${session.account.label}`);
+          break;
+        }
+        if (attempt < 4) {
+          out.appendLine(`[platform] no session yet, waiting... (attempt ${attempt + 1}/5)`);
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
+      } catch (err) {
+        out.appendLine(`[platform] silent session check failed: ${String(err)}`);
+      }
+    }
+
+    // If still no session, prompt for sign-in
+    if (!session) {
+      out.appendLine('[platform] no cached session, prompting sign-in');
+      session = await requireSession(true);
+    }
     if (!session) {
       throw new Error('Aegis sign-in required.');
     }
 
     const metadata = this.buildMetadata(session);
+    out.appendLine(`[platform] making CreateConnectionSession gRPC call for ${wid}`);
+
+    // Add a deadline to prevent hanging forever
+    const deadline = new Date();
+    deadline.setSeconds(deadline.getSeconds() + 30);
+
+    // Force channel to connect and log state changes
+    const channel = (this.client as any).getChannel?.();
+    if (channel) {
+      const currentState = channel.getConnectivityState(true); // true = try to connect
+      out.appendLine(`[platform] gRPC channel state after connect request: ${currentState}`);
+
+      // Watch for state changes
+      const watchState = (prevState: number) => {
+        channel.watchConnectivityState(prevState, Date.now() + 10000, (err: Error | null) => {
+          if (err) {
+            out.appendLine(`[platform] gRPC channel watch error: ${err.message}`);
+            return;
+          }
+          const newState = channel.getConnectivityState(false);
+          out.appendLine(`[platform] gRPC channel state changed: ${prevState} -> ${newState}`);
+          if (newState !== 2 && newState !== 4) { // Not READY or SHUTDOWN
+            watchState(newState);
+          }
+        });
+      };
+      watchState(currentState);
+    }
+
     return new Promise<ProxyTicket>((resolve, reject) => {
-      this.client!.CreateConnectionSession({ workload_id: wid, client: 'vscode' }, metadata, (err, response) => {
+      const call = this.client!.CreateConnectionSession({ workload_id: wid, client: 'vscode' }, metadata, { deadline }, (err, response) => {
+        out.appendLine(`[platform] CreateConnectionSession callback received`);
         if (err) {
+          out.appendLine(`[platform] CreateConnectionSession error: ${err.message} (code: ${err.code})`);
+          if (err.details) {
+            out.appendLine(`[platform] CreateConnectionSession details: ${err.details}`);
+          }
           reject(err);
           return;
         }
