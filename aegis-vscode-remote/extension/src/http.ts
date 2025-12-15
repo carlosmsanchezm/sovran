@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import type Dispatcher from 'undici/types/dispatcher';
 import type { SecuritySettings } from './config';
 import { out } from './ui';
+import { getCombinedCAsArray } from './tls';
 
 let originalDispatcher: Dispatcher | undefined;
 let customAgent: Agent | undefined;
@@ -36,11 +37,13 @@ export async function configureHttpSecurity(security: SecuritySettings): Promise
 
   if (security.caPath) {
     try {
-      const ca = await fs.readFile(security.caPath);
-      if (ca.length > 0) {
-        connectOptions.ca = ca;
+      const customCA = await fs.readFile(security.caPath);
+      if (customCA.length > 0) {
+        // Use shared utility to combine system CAs with custom CA
+        // See /docs/infrastructure-reference.md for why this is required
+        const combinedCAs = getCombinedCAsArray(customCA);
+        connectOptions.ca = combinedCAs;
         useCustomAgent = true;
-        out.appendLine(`[http] loaded CA bundle (${security.caPath}) length=${ca.length}`);
       } else {
         out.appendLine(`[http] WARNING: CA bundle at ${security.caPath} was empty`);
       }
