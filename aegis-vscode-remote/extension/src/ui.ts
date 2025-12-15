@@ -9,20 +9,52 @@ export class Status {
 }
 export const status = new Status();
 
+/**
+ * Gets the currently connected workspace ID by checking if we're in a remote context.
+ * Returns undefined if not connected to an Aegis workspace.
+ */
+export function getConnectedWorkspaceId(): string | undefined {
+  // Check if we're in an Aegis remote context
+  if (vscode.env.remoteName !== 'aegis') {
+    return undefined;
+  }
+
+  // Extract workspace ID from the remote authority
+  // The authority format is: aegis+<workspace-id>
+  const folders = vscode.workspace.workspaceFolders;
+  if (folders && folders.length > 0) {
+    const uri = folders[0].uri;
+    if (uri.scheme === 'vscode-remote' && uri.authority.startsWith('aegis+')) {
+      return uri.authority.substring('aegis+'.length);
+    }
+  }
+
+  return undefined;
+}
+
 class WorkspaceTreeItem extends vscode.TreeItem {
-  constructor(public readonly workspace: WorkspaceSummary) {
+  constructor(public readonly workspace: WorkspaceSummary, isConnected: boolean) {
     super(workspace.name ?? workspace.id, vscode.TreeItemCollapsibleState.None);
-    this.contextValue = 'workspace';
-    const descriptionParts: string[] = [];
-    if (workspace.cluster) descriptionParts.push(workspace.cluster);
-    if (workspace.dns) descriptionParts.push(workspace.dns);
-    if (workspace.profile) descriptionParts.push(`profile: ${workspace.profile}`);
-    this.description = descriptionParts.join(' · ') || undefined;
-    this.command = {
-      command: 'aegis.connect',
-      title: 'Connect',
-      arguments: [workspace.id],
-    };
+
+    if (isConnected) {
+      this.contextValue = 'workspace-connected';
+      this.iconPath = new vscode.ThemeIcon('vm-running', new vscode.ThemeColor('charts.green'));
+      this.description = 'Connected';
+      // Don't set command - already connected
+    } else {
+      this.contextValue = 'workspace';
+      this.iconPath = new vscode.ThemeIcon('vm-outline');
+      const descriptionParts: string[] = [];
+      if (workspace.cluster) descriptionParts.push(workspace.cluster);
+      if (workspace.dns) descriptionParts.push(workspace.dns);
+      if (workspace.profile) descriptionParts.push(`profile: ${workspace.profile}`);
+      this.description = descriptionParts.join(' · ') || undefined;
+      this.command = {
+        command: 'aegis.connect',
+        title: 'Connect',
+        arguments: [workspace.id],
+      };
+    }
   }
 }
 
@@ -78,7 +110,21 @@ export class WorkspacesProvider implements vscode.TreeDataProvider<vscode.TreeIt
       out.appendLine('[ui] calling listWorkspaces()...');
       const workspaces = await listWorkspaces();
       out.appendLine(`[ui] listWorkspaces() returned ${workspaces.length} items`);
-      this.items = workspaces.map((ws) => new WorkspaceTreeItem(ws));
+
+      // Check if we're connected to a workspace
+      const connectedId = getConnectedWorkspaceId();
+      if (connectedId) {
+        out.appendLine(`[ui] currently connected to workspace: ${connectedId}`);
+      }
+
+      // Sort connected workspace to top
+      const sorted = [...workspaces].sort((a, b) => {
+        if (a.id === connectedId) return -1;
+        if (b.id === connectedId) return 1;
+        return 0;
+      });
+
+      this.items = sorted.map((ws) => new WorkspaceTreeItem(ws, ws.id === connectedId));
       this.lastError = undefined;
     } catch (err) {
       this.lastError = err;
