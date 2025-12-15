@@ -42,6 +42,7 @@ export class WorkspacesProvider implements vscode.TreeDataProvider<vscode.TreeIt
   }
 
   refresh() {
+    out.appendLine('[ui] refresh() called');
     this.loadedOnce = false;
     this.onDidChangeEmitter.fire();
   }
@@ -51,6 +52,7 @@ export class WorkspacesProvider implements vscode.TreeDataProvider<vscode.TreeIt
   }
 
   async getChildren(): Promise<vscode.TreeItem[]> {
+    out.appendLine(`[ui] getChildren() called, loading=${this.loading}, loadedOnce=${this.loadedOnce}`);
     if (this.loading) {
       return [this.createInfoItem('Loading workspaces…')];
     }
@@ -58,19 +60,24 @@ export class WorkspacesProvider implements vscode.TreeDataProvider<vscode.TreeIt
       await this.load();
     }
     if (this.items.length > 0) {
+      out.appendLine(`[ui] returning ${this.items.length} workspaces`);
       return this.items;
     }
     if (this.lastError) {
+      out.appendLine(`[ui] returning error: ${String(this.lastError)}`);
       return [this.createErrorItem(this.lastError)];
     }
     return [this.createInfoItem('No workspaces available')];
   }
 
   private async load() {
+    out.appendLine('[ui] load() starting');
     this.loading = true;
     this.onDidChangeEmitter.fire();
     try {
+      out.appendLine('[ui] calling listWorkspaces()...');
       const workspaces = await listWorkspaces();
+      out.appendLine(`[ui] listWorkspaces() returned ${workspaces.length} items`);
       this.items = workspaces.map((ws) => new WorkspaceTreeItem(ws));
       this.lastError = undefined;
     } catch (err) {

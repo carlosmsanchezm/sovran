@@ -44,8 +44,37 @@ export async function activate(ctx: vscode.ExtensionContext) {
           const workspaceId = match[1];
           out.appendLine(`[uri-handler] connecting to workspace: ${workspaceId}`);
 
-          // Ensure user is signed in
-          await requireSession(true);
+          // Ensure user is signed in (with retry logic for race condition after OAuth callback)
+          let session: vscode.AuthenticationSession | undefined;
+          for (let attempt = 0; attempt < 5; attempt++) {
+            try {
+              // First try silently to avoid triggering a new auth flow if session is being stored
+              session = await vscode.authentication.getSession('aegis', ['platform'], {
+                createIfNone: false,
+                silent: true,
+              });
+              if (session) {
+                break;
+              }
+              // Small delay to allow OAuth completion to finish storing the session
+              if (attempt < 4) {
+                out.appendLine(`[uri-handler] no session yet, waiting... (attempt ${attempt + 1}/5)`);
+                await new Promise(resolve => setTimeout(resolve, 300));
+              }
+            } catch (err) {
+              out.appendLine(`[uri-handler] session check failed: ${String(err)}`);
+            }
+          }
+          // If no session after retries, prompt for sign-in
+          if (!session) {
+            out.appendLine('[uri-handler] no cached session found, prompting sign-in');
+            session = await requireSession(true);
+          }
+          if (!session) {
+            out.appendLine('[uri-handler] sign-in failed or cancelled');
+            return;
+          }
+          out.appendLine(`[uri-handler] authenticated as ${session.account.label}`);
 
           // Open the workspace in a new window
           const remoteUri = vscode.Uri.parse(`vscode-remote://aegis+${workspaceId}/home/project`);
