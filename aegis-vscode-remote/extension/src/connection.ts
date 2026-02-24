@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import WebSocket from 'ws';
 import { LogLevel } from './config';
+import { categorizeConnectionError, categorizeCloseCode, type CloseInfo } from './errors';
 
 export interface Managed {
   readonly onDidReceiveMessage: vscode.Event<Uint8Array>;
@@ -44,8 +45,14 @@ export class ConnectionManager {
   private hb?: NodeJS.Timeout;
   private idleTimer?: NodeJS.Timeout;
   private metrics: ConnMetrics = { attempt: 0, bytesRx: 0, bytesTx: 0 };
+  private _lastCloseInfo?: CloseInfo;
 
   constructor(private url: string, private opts: ConnectionOptions) {}
+
+  /** Returns categorised information about the last WebSocket close event. */
+  get lastCloseInfo(): CloseInfo | undefined {
+    return this._lastCloseInfo;
+  }
 
   open(): Thenable<Managed> {
     const onRx = new vscode.EventEmitter<Uint8Array>();
@@ -186,15 +193,22 @@ export class ConnectionManager {
 
       ws.on('close', (code, reason) => {
         this.metrics.lastClose = { code, reason: reason?.toString() };
-        this.opts.log(`[conn] close code=${code} reason=${reason}`);
-        finish();
+        this._lastCloseInfo = categorizeCloseCode(code, reason?.toString());
+        this.opts.log(`[conn] close code=${code} reason=${reason} category=${this._lastCloseInfo.category}`);
+
+        if (this._lastCloseInfo.isAbnormal) {
+          // Surface abnormal closes through the error path so listeners can react
+          finish(new Error(this._lastCloseInfo.userMessage));
+        } else {
+          finish();
+        }
       });
 
       ws.on('error', (err) => {
         const error = err instanceof Error ? err : new Error(String(err));
         this.metrics.lastError = error.message;
-        const summary = error?.message ? `${error.message}` : String(error ?? 'unknown error');
-        this.opts.log(`[conn] error ${summary}`);
+        const categorized = categorizeConnectionError(error);
+        this.opts.log(`[conn] error category=${categorized.category}: ${categorized.message}`);
         if (ws.readyState === WebSocket.CONNECTING) {
           clearTimers();
           reject(error);

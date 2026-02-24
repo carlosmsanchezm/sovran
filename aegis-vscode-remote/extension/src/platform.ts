@@ -7,6 +7,7 @@ import { getSettings, AegisSettings } from './config';
 import { getSessionUser, requireSession } from './auth';
 import { out } from './ui';
 import { loadCombinedCAsBuffer } from './tls';
+import { withRetry } from './errors';
 
 interface WorkspaceMessage {
   id: string;
@@ -51,11 +52,40 @@ export interface ProxyTicketSummary {
   serverName?: string;
 }
 
+export interface RenewedTicket {
+  sessionId: string;
+  jwt: string;
+  proxyUrl: string;
+  expiresAtUtc?: string;
+  ttlSeconds: number;
+}
+
 let lastTicketSummary: ProxyTicketSummary | undefined;
+let currentSessionId: string | undefined;
 
 export function getLastProxyTicketSummary(): ProxyTicketSummary | undefined {
   return lastTicketSummary;
 }
+
+export function getCurrentSessionId(): string | undefined {
+  return currentSessionId;
+}
+
+export function clearCurrentSessionId(): void {
+  currentSessionId = undefined;
+}
+
+type ConnectionSessionResponse = {
+  session_id?: string;
+  token?: string;
+  proxy_url?: string;
+  ssh_user?: string;
+  ssh_host_alias?: string;
+  expires_at_utc?: string;
+  ssh_config?: string;
+  one_time?: boolean;
+  jti?: string;
+};
 
 type PlatformClientGrpc = grpc.Client & {
   ListWorkloads(
@@ -72,17 +102,25 @@ type PlatformClientGrpc = grpc.Client & {
     options: grpc.CallOptions,
     callback: (
       err: grpc.ServiceError | null,
-      response: {
-        session_id?: string;
-        token?: string;
-        proxy_url?: string;
-        ssh_user?: string;
-        ssh_host_alias?: string;
-        expires_at_utc?: string;
-        ssh_config?: string;
-        one_time?: boolean;
-        jti?: string;
-      }
+      response: ConnectionSessionResponse
+    ) => void
+  ): grpc.ClientUnaryCall;
+  RenewConnectionSession(
+    request: { session_id: string },
+    metadata: grpc.Metadata,
+    options: grpc.CallOptions,
+    callback: (
+      err: grpc.ServiceError | null,
+      response: ConnectionSessionResponse
+    ) => void
+  ): grpc.ClientUnaryCall;
+  RevokeConnectionSession(
+    request: { session_id: string },
+    metadata: grpc.Metadata,
+    options: grpc.CallOptions,
+    callback: (
+      err: grpc.ServiceError | null,
+      response: {}
     ) => void
   ): grpc.ClientUnaryCall;
 };
@@ -335,6 +373,10 @@ class PlatformClient {
           reject(new Error('Platform returned an incomplete proxy ticket.'));
           return;
         }
+        if (response.session_id) {
+          currentSessionId = response.session_id;
+          out.appendLine(`[platform] stored session_id=${response.session_id}`);
+        }
         const ticket: ProxyTicket = {
           proxyUrl: response.proxy_url,
           jwt: response.token,
@@ -358,6 +400,117 @@ class PlatformClient {
           serverName: ticket.serverName,
         };
         resolve(ticket);
+      });
+    });
+  }
+
+  async renewConnectionSession(sessionId: string): Promise<RenewedTicket> {
+    this.ensureSettingsPresent();
+    await this.ensureClients();
+    if (!this.client) {
+      throw new Error('Platform gRPC client not initialized.');
+    }
+
+    const session = await requireSession(true);
+    if (!session) {
+      throw new Error('Aegis sign-in required.');
+    }
+
+    const metadata = this.buildMetadata(session);
+    const deadline = new Date();
+    deadline.setSeconds(deadline.getSeconds() + 30);
+
+    out.appendLine(`[platform] RenewConnectionSession(${sessionId})`);
+
+    return new Promise<RenewedTicket>((resolve, reject) => {
+      this.client!.RenewConnectionSession({ session_id: sessionId }, metadata, { deadline }, (err, response) => {
+        if (err) {
+          out.appendLine(`[platform] RenewConnectionSession error: ${err.message} (code: ${err.code})`);
+          reject(err);
+          return;
+        }
+        if (!response?.token || !response?.proxy_url) {
+          reject(new Error('RenewConnectionSession returned incomplete response.'));
+          return;
+        }
+
+        const renewedSessionId = response.session_id ?? sessionId;
+        currentSessionId = renewedSessionId;
+
+        // Compute TTL from expires_at_utc
+        let ttlSeconds = 0;
+        if (response.expires_at_utc) {
+          const expiresMs = new Date(response.expires_at_utc).getTime();
+          ttlSeconds = Math.max(0, Math.floor((expiresMs - Date.now()) / 1000));
+        }
+
+        const ticket: RenewedTicket = {
+          sessionId: renewedSessionId,
+          jwt: response.token,
+          proxyUrl: response.proxy_url,
+          expiresAtUtc: response.expires_at_utc,
+          ttlSeconds,
+        };
+
+        lastTicketSummary = {
+          proxyUrl: ticket.proxyUrl,
+          expiresAt: response.expires_at_utc,
+          hasClientCert: false,
+          jti: response.jti,
+          dest: undefined,
+          serverName: undefined,
+        };
+
+        out.appendLine(`[platform] RenewConnectionSession success, new ttl=${ttlSeconds}s`);
+        resolve(ticket);
+      });
+    });
+  }
+
+  async revokeConnectionSession(sessionId: string): Promise<void> {
+    try {
+      await this.ensureClients();
+    } catch (err) {
+      out.appendLine(`[platform] RevokeConnectionSession skipped (client init failed): ${String(err)}`);
+      return;
+    }
+    if (!this.client) {
+      out.appendLine('[platform] RevokeConnectionSession skipped (no client)');
+      return;
+    }
+
+    let session: vscode.AuthenticationSession | undefined;
+    try {
+      session = await vscode.authentication.getSession('aegis', ['platform'], {
+        createIfNone: false,
+        silent: true,
+      });
+    } catch {
+      // best-effort: if we can't get a session, skip revocation
+    }
+    if (!session) {
+      out.appendLine('[platform] RevokeConnectionSession skipped (no auth session)');
+      return;
+    }
+
+    const metadata = this.buildMetadata(session);
+    const deadline = new Date();
+    deadline.setSeconds(deadline.getSeconds() + 10);
+
+    out.appendLine(`[platform] RevokeConnectionSession(${sessionId})`);
+
+    return new Promise<void>((resolve) => {
+      this.client!.RevokeConnectionSession({ session_id: sessionId }, metadata, { deadline }, (err) => {
+        if (err) {
+          out.appendLine(`[platform] RevokeConnectionSession error (ignored): ${err.message}`);
+        } else {
+          out.appendLine(`[platform] RevokeConnectionSession success`);
+        }
+        // Always clear the stored session id on revocation attempt
+        if (currentSessionId === sessionId) {
+          currentSessionId = undefined;
+        }
+        resolve();
       });
     });
   }
@@ -395,9 +548,23 @@ export async function refreshPlatformSettings() {
 }
 
 export async function listWorkspaces(): Promise<WorkspaceSummary[]> {
-  return getPlatformClient().listWorkspaces();
+  return withRetry(
+    () => getPlatformClient().listWorkspaces(),
+    { maxRetries: 3, baseDelayMs: 1000, label: 'listWorkspaces' },
+  );
 }
 
 export async function issueProxyTicket(wid: string): Promise<ProxyTicket> {
-  return getPlatformClient().issueProxyTicket(wid);
+  return withRetry(
+    () => getPlatformClient().issueProxyTicket(wid),
+    { maxRetries: 3, baseDelayMs: 1000, label: 'issueProxyTicket' },
+  );
+}
+
+export async function renewConnectionSession(sessionId: string): Promise<RenewedTicket> {
+  return getPlatformClient().renewConnectionSession(sessionId);
+}
+
+export async function revokeConnectionSession(sessionId: string): Promise<void> {
+  return getPlatformClient().revokeConnectionSession(sessionId);
 }

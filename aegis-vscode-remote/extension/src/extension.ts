@@ -1,7 +1,7 @@
 /// <reference path="../vscode.proposed.resolvers.d.ts" />
 import * as vscode from 'vscode';
 import { out, status, WorkspacesProvider } from './ui';
-import { AegisResolver, forceReconnect, getLastConnection } from './resolver';
+import { AegisResolver, forceReconnect, getLastConnection, revokeCurrentSession } from './resolver';
 import { registerDiagnostics } from './diagnostics';
 import { getSettings, onDidChangeSettings } from './config';
 import { handleAuthUri, initializeAuth, requireSession, signOut } from './auth';
@@ -11,6 +11,19 @@ import { configureHttpSecurity, disposeHttpSecurity } from './http';
 export async function activate(ctx: vscode.ExtensionContext) {
   out.appendLine('Aegis Remote activated');
   status.set('$(circle-outline) Aegis: Idle');
+
+  // Warn if not running VS Code Insiders (proposed APIs require it)
+  if (!vscode.env.appName.includes('Insiders')) {
+    vscode.window.showWarningMessage(
+      'Aegis Remote requires VS Code Insiders with proposed APIs enabled. ' +
+      'Please see the setup guide: https://github.com/aegis-platform/sovran/blob/main/SETUP_INSIDERS.md',
+      'Open Setup Guide'
+    ).then(selection => {
+      if (selection === 'Open Setup Guide') {
+        vscode.env.openExternal(vscode.Uri.parse('https://github.com/aegis-platform/sovran/blob/main/SETUP_INSIDERS.md'));
+      }
+    });
+  }
 
   const initialSettings = getSettings();
   await configureHttpSecurity(initialSettings.security);
@@ -98,7 +111,10 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
   ctx.subscriptions.push(
     vscode.commands.registerCommand('aegis.showLogs', () => out.show()),
-    vscode.commands.registerCommand('aegis.disconnect', () => vscode.commands.executeCommand('workbench.action.closeWindow')),
+    vscode.commands.registerCommand('aegis.disconnect', async () => {
+      await revokeCurrentSession().catch(() => {});
+      await vscode.commands.executeCommand('workbench.action.closeWindow');
+    }),
     vscode.commands.registerCommand('aegis.reconnect', () => {
       forceReconnect();
     }),
@@ -125,4 +141,10 @@ export async function activate(ctx: vscode.ExtensionContext) {
   );
 }
 
-export function deactivate() {}
+export function deactivate() {
+  // Best-effort revocation of the connection session on extension shutdown.
+  // VS Code allows deactivate() to return a promise with a short timeout.
+  return revokeCurrentSession().catch(() => {
+    // Swallow errors — this is best-effort cleanup on shutdown
+  });
+}

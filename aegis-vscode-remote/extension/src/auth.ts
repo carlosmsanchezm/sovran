@@ -5,6 +5,7 @@ import { promises as fs } from 'fs';
 import * as vscode from 'vscode';
 import { getSettings } from './config';
 import { getHttpDispatcher } from './http';
+import { withRetry } from './errors';
 
 const AUTH_PROVIDER_ID = 'aegis';
 const AUTH_PROVIDER_LABEL = 'Aegis Platform';
@@ -351,7 +352,10 @@ class AegisAuthenticationProvider implements vscode.AuthenticationProvider, vsco
 
     if (this.isExpiringSoon(persisted) && persisted.refreshToken) {
       try {
-        const refreshed = await this.refreshTokens(persisted.refreshToken, persisted.scope);
+        const refreshed = await withRetry(
+          () => this.refreshTokens(persisted.refreshToken!, persisted.scope),
+          { maxRetries: 3, baseDelayMs: 1000, label: 'token refresh' },
+        );
         const merged: PersistedSession = {
           ...persisted,
           ...refreshed,
