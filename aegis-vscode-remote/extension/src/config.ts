@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { isSecureMode, clampLogLevel } from './secure-mode';
 
 export type LogLevel = 'info' | 'debug' | 'trace';
 
@@ -9,7 +10,9 @@ export interface SecuritySettings {
 }
 
 export interface PlatformSettings {
+  url: string; // Single platform URL for auto-discovery (e.g., "aegis.company.mil")
   grpcEndpoint: string;
+  grpcServerName: string;
   namespace: string;
   authScope: string;
   projectId: string;
@@ -31,13 +34,23 @@ export interface AegisSettings {
   idleTimeoutMs: number;
   security: SecuritySettings;
   logLevel: LogLevel;
+  isSecureMode: boolean;
 }
 
 export function getSettings(): AegisSettings {
   const cfg = vscode.workspace.getConfiguration('aegisRemote');
+  const secure = isSecureMode();
+
+  let scopes: string[] = cfg.get('auth.scopes', ['openid', 'profile', 'email', 'offline_access']);
+  if (secure) {
+    scopes = scopes.filter((s) => s !== 'offline_access');
+  }
+
   return {
     platform: {
+      url: cfg.get('platform.url', ''),
       grpcEndpoint: cfg.get('platform.grpcEndpoint', ''),
+      grpcServerName: cfg.get('platform.grpcServerName', ''),
       namespace: cfg.get('platform.namespace', 'default'),
       authScope: cfg.get('platform.authScope', 'aegis-platform'),
       projectId: cfg.get('platform.projectId', ''),
@@ -46,18 +59,19 @@ export function getSettings(): AegisSettings {
       authority: cfg.get('auth.authority', ''),
       clientId: cfg.get('auth.clientId', ''),
       redirectUri: cfg.get('auth.redirectUri', 'vscode://aegis.aegis-remote/auth'),
-      scopes: cfg.get('auth.scopes', ['openid', 'profile', 'email', 'offline_access']),
+      scopes,
       prompt: cfg.get('auth.prompt', ''),
     },
     defaultWorkspaceId: cfg.get('defaultWorkspaceId', ''),
     heartbeatIntervalMs: cfg.get('heartbeatIntervalMs', 15_000),
     idleTimeoutMs: cfg.get('idleTimeoutMs', 45_000),
     security: {
-      rejectUnauthorized: cfg.get('security.rejectUnauthorized', true),
+      rejectUnauthorized: secure ? true : cfg.get('security.rejectUnauthorized', true),
       mtlsSource: cfg.get('security.mtlsSource', 'platform'),
       caPath: cfg.get('security.caPath', ''),
     },
-    logLevel: cfg.get('logLevel', 'info'),
+    logLevel: clampLogLevel(cfg.get('logLevel', 'info')),
+    isSecureMode: secure,
   };
 }
 

@@ -5,7 +5,7 @@ import { AegisResolver, forceReconnect, getLastConnection, revokeCurrentSession 
 import { registerDiagnostics } from './diagnostics';
 import { getSettings, onDidChangeSettings } from './config';
 import { handleAuthUri, initializeAuth, requireSession, signOut, clearAllSecrets } from './auth';
-import { initializePlatform, refreshPlatformSettings, fetchPlatformRootCA } from './platform';
+import { initializePlatform, refreshPlatformSettings, fetchPlatformRootCA, fetchDiscovery } from './platform';
 import { configureHttpSecurity, disposeHttpSecurity } from './http';
 import { isSecureMode, redactSettings } from './secure-mode';
 import { promises as fs } from 'fs';
@@ -23,10 +23,42 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
   const initialSettings = getSettings();
 
+  // Platform discovery: if platform.url is set, auto-discover all endpoints.
+  // This replaces manual configuration of grpcEndpoint, auth.authority, and caPath.
+  const platformUrl = initialSettings.platform.url?.trim();
+  if (platformUrl && !initialSettings.platform.grpcEndpoint) {
+    out.appendLine(`[discovery] fetching configuration from ${platformUrl}`);
+    try {
+      const discovery = await fetchDiscovery(platformUrl);
+      if (discovery) {
+        initialSettings.platform.grpcEndpoint = discovery.grpc_endpoint;
+        initialSettings.auth.authority = discovery.auth?.authority ?? '';
+        initialSettings.auth.clientId = discovery.auth?.client_id ?? initialSettings.auth.clientId;
+        out.appendLine(`[discovery] auto-configured: grpc=${discovery.grpc_endpoint}, auth=${discovery.auth?.authority}`);
+
+        // Cache discovery for offline use
+        await ctx.globalState.update('aegis.discovery', JSON.stringify(discovery));
+      }
+    } catch (err) {
+      out.appendLine(`[discovery] fetch failed: ${String(err)}`);
+      // Try cached discovery
+      const cached = ctx.globalState.get<string>('aegis.discovery');
+      if (cached) {
+        try {
+          const discovery = JSON.parse(cached);
+          initialSettings.platform.grpcEndpoint = discovery.grpc_endpoint;
+          initialSettings.auth.authority = discovery.auth?.authority ?? '';
+          initialSettings.auth.clientId = discovery.auth?.client_id ?? initialSettings.auth.clientId;
+          out.appendLine(`[discovery] using cached configuration`);
+        } catch { /* ignore parse errors */ }
+      }
+    }
+  }
+
   // Auto-fetch platform root CA if no caPath is configured.
   // Uses HTTPS (system CAs validate ingress cert) to bootstrap trust.
-  // Cached in extension storage for subsequent launches.
-  if (!initialSettings.security.caPath && initialSettings.platform.grpcEndpoint) {
+  const caSource = platformUrl || initialSettings.platform.grpcEndpoint;
+  if (!initialSettings.security.caPath && caSource) {
     const cachedCA = ctx.globalState.get<string>('aegis.cachedRootCA');
     if (cachedCA) {
       out.appendLine(`[platform] using cached root CA (${cachedCA.length} bytes)`);
@@ -36,7 +68,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
       await fs.writeFile(caFile, cachedCA);
       initialSettings.security.caPath = caFile;
     } else {
-      const ca = await fetchPlatformRootCA(initialSettings.platform.grpcEndpoint);
+      const ca = await fetchPlatformRootCA(caSource);
       if (ca) {
         await ctx.globalState.update('aegis.cachedRootCA', ca);
         const caDir = path.join(ctx.globalStorageUri.fsPath);

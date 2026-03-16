@@ -151,6 +151,62 @@ function isUnauthenticatedError(err: unknown): boolean {
  * Uses HTTPS with system CAs to validate the ingress certificate, then
  * returns the internal CA for subsequent gRPC/WebSocket trust.
  */
+/**
+ * Fetch the platform discovery document from the public HTTP endpoint.
+ * No authentication required — returns only public metadata (endpoint URLs).
+ * Uses system CAs to validate the ingress TLS certificate.
+ */
+export async function fetchDiscovery(platformUrl: string): Promise<{
+  grpc_endpoint: string;
+  auth?: { authority?: string; client_id?: string };
+  pki?: { root_ca_url?: string };
+} | undefined> {
+  try {
+    const url = `https://${platformUrl}/api/v1/discovery`;
+    out.appendLine(`[discovery] fetching from ${url}`);
+
+    const https = await import('https');
+    return new Promise((resolve) => {
+      const req = https.get(url, { timeout: 10000 }, (res) => {
+        if (res.statusCode !== 200) {
+          out.appendLine(`[discovery] fetch failed: HTTP ${res.statusCode}`);
+          resolve(undefined);
+          return;
+        }
+        let data = '';
+        res.on('data', (chunk: string) => { data += chunk; });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.grpc_endpoint) {
+              out.appendLine(`[discovery] success: grpc=${parsed.grpc_endpoint}`);
+              resolve(parsed);
+            } else {
+              out.appendLine(`[discovery] response missing grpc_endpoint`);
+              resolve(undefined);
+            }
+          } catch (err) {
+            out.appendLine(`[discovery] invalid JSON: ${String(err)}`);
+            resolve(undefined);
+          }
+        });
+      });
+      req.on('error', (err) => {
+        out.appendLine(`[discovery] error: ${String(err)}`);
+        resolve(undefined);
+      });
+      req.on('timeout', () => {
+        out.appendLine(`[discovery] timed out`);
+        req.destroy();
+        resolve(undefined);
+      });
+    });
+  } catch (err) {
+    out.appendLine(`[discovery] failed: ${String(err)}`);
+    return undefined;
+  }
+}
+
 export async function fetchPlatformRootCA(grpcEndpoint: string): Promise<string | undefined> {
   try {
     const host = grpcEndpoint.split(':')[0];

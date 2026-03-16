@@ -88,10 +88,20 @@
     "configuration": {
       "title": "Aegis Remote",
       "properties": {
+        "aegisRemote.platform.url": {
+          "type": "string",
+          "default": "",
+          "description": "Platform URL for auto-discovery (e.g. aegis.company.mil). When set, all other platform/auth settings are derived automatically. This is the only setting most users need."
+        },
         "aegisRemote.platform.grpcEndpoint": {
           "type": "string",
           "default": "",
-          "description": "Host:port for the Aegis Platform gRPC endpoint (e.g. platform.aegis.example.com:443)."
+          "description": "Host:port for the Aegis Platform gRPC endpoint. Leave empty if platform.url is set (auto-discovered)."
+        },
+        "aegisRemote.platform.grpcServerName": {
+          "type": "string",
+          "default": "",
+          "description": "TLS server name override for gRPC connections. Set when the endpoint hostname differs from the server certificate SAN (e.g. localhost connecting to a TLS server with cert for platform-api-grpc.localtest.me)."
         },
         "aegisRemote.platform.namespace": {
           "type": "string",
