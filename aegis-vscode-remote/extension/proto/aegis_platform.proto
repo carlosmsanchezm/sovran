@@ -92,6 +92,8 @@ message ConnectionSession {
   string proxy_url = 7;
   string expires_at_utc = 8;
   bool one_time = 9;
+  string proxy_ca_pem = 10; // PEM-encoded CA cert for the spoke-proxy TLS certificate
+  string workspace_root = 11; // filesystem path for VS Code to open (e.g., "/home/aegis/work")
 }
 
 message RenewConnectionSessionRequest {
@@ -108,6 +110,8 @@ message ClusterHeartbeat { string cluster_id = 1; double ttf_gpu_seconds_p50 = 2
 message ClusterHeartbeatAck { bool ok = 1; }
 
 message CreateProjectRequest { Project project = 1; }
+message ListProjectsRequest {}
+message ListProjectsResponse { repeated Project items = 1; }
 message UpsertBudgetRequest { Budget budget = 1; }
 message UpsertFlavorRequest { Flavor flavor = 1; }
 message UpsertQueueRequest  { Queue queue = 1; }
@@ -161,6 +165,7 @@ message ListBudgetsResponse { repeated BudgetWithUsage items = 1; }
 
 service AegisPlatform {
   rpc CreateProject(CreateProjectRequest) returns (Project);
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
   rpc UpsertBudget(UpsertBudgetRequest) returns (Budget);
   rpc GetBudget(GetBudgetRequest) returns (GetBudgetResponse);
   rpc ListBudgets(ListBudgetsRequest) returns (ListBudgetsResponse);

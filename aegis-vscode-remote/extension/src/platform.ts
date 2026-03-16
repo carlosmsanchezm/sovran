@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { getGrpcTargetOverrides } from './grpc-target';
 import { getSettings, AegisSettings } from './config';
-import { getSessionUser, requireSession } from './auth';
+import { getSessionUser, requireSession, signOut } from './auth';
 import { out } from './ui';
 import { loadCombinedCAsBuffer } from './tls';
 import { withRetry } from './errors';
@@ -27,6 +27,7 @@ export interface WorkspaceSummary {
   persona?: string;
   status?: string;
   uiStatus?: string;
+  workspaceRoot?: string;
 }
 
 export interface ProxyTicket {
@@ -41,6 +42,7 @@ export interface ProxyTicket {
   dest?: string;
   dns?: string[];
   groups?: string[];
+  workspaceRoot?: string;
 }
 
 export interface ProxyTicketSummary {
@@ -85,9 +87,19 @@ type ConnectionSessionResponse = {
   ssh_config?: string;
   one_time?: boolean;
   jti?: string;
+  proxy_ca_pem?: string;
+  workspace_root?: string;
 };
 
 type PlatformClientGrpc = grpc.Client & {
+  ListProjects(
+    request: Record<string, never>,
+    metadata: grpc.Metadata,
+    callback: (
+      err: grpc.ServiceError | null,
+      response: { items?: Array<{ id?: string; display_name?: string }> }
+    ) => void
+  ): void;
   ListWorkloads(
     request: { project_id?: string },
     metadata: grpc.Metadata,
@@ -125,6 +137,62 @@ type PlatformClientGrpc = grpc.Client & {
   ): grpc.ClientUnaryCall;
 };
 
+function isUnauthenticatedError(err: unknown): boolean {
+  const grpcErr = err as grpc.ServiceError | undefined;
+  if (grpcErr?.code === grpc.status.UNAUTHENTICATED) {
+    return true;
+  }
+  const message = grpcErr?.message ?? (err instanceof Error ? err.message : String(err));
+  return /UNAUTHENTICATED|invalid bearer token|token audience not accepted/i.test(message);
+}
+
+/**
+ * Fetch the platform's root CA certificate from the PKI endpoint.
+ * Uses HTTPS with system CAs to validate the ingress certificate, then
+ * returns the internal CA for subsequent gRPC/WebSocket trust.
+ */
+export async function fetchPlatformRootCA(grpcEndpoint: string): Promise<string | undefined> {
+  try {
+    const host = grpcEndpoint.split(':')[0];
+    const pkiUrl = `https://${host}/api/v1/pki/root-ca`;
+    out.appendLine(`[platform] fetching root CA from ${pkiUrl}`);
+
+    const https = await import('https');
+    return new Promise<string | undefined>((resolve) => {
+      const req = https.get(pkiUrl, { timeout: 10000 }, (res) => {
+        if (res.statusCode !== 200) {
+          out.appendLine(`[platform] root CA fetch failed: HTTP ${res.statusCode}`);
+          resolve(undefined);
+          return;
+        }
+        let data = '';
+        res.on('data', (chunk: string) => { data += chunk; });
+        res.on('end', () => {
+          if (data.includes('BEGIN CERTIFICATE')) {
+            out.appendLine(`[platform] root CA fetched successfully (${data.length} bytes)`);
+            resolve(data);
+          } else {
+            out.appendLine(`[platform] root CA response does not contain a certificate`);
+            resolve(undefined);
+          }
+        });
+      });
+      req.on('error', (err) => {
+        out.appendLine(`[platform] root CA fetch error: ${String(err)}`);
+        resolve(undefined);
+      });
+      req.on('timeout', () => {
+        out.appendLine(`[platform] root CA fetch timed out`);
+        req.destroy();
+        resolve(undefined);
+      });
+    });
+  } catch (err) {
+    out.appendLine(`[platform] root CA fetch failed: ${String(err)}`);
+    return undefined;
+  }
+}
+
 class PlatformClient {
   private client: PlatformClientGrpc | undefined;
   private settings: AegisSettings | undefined;
@@ -153,13 +221,18 @@ class PlatformClient {
 
   private async ensureClients() {
     const settings = getSettings();
-    this.settings = settings;
-
     const endpoint = this.normalizeEndpoint(settings.platform.grpcEndpoint);
     if (!endpoint) {
       this.disposeClients();
       return;
     }
+    if (this.client && this.settings &&
+        this.normalizeEndpoint(this.settings.platform.grpcEndpoint) === endpoint &&
+        this.settings.security.caPath === settings.security.caPath &&
+        this.settings.platform.grpcServerName === settings.platform.grpcServerName) {
+      return;
+    }
+    this.settings = settings;
 
     const packageDefinition = await protoLoader.load(this.protoPath, {
       keepCase: true,
@@ -179,8 +252,15 @@ class PlatformClient {
     const clientOptions: grpc.ClientOptions = {
       'grpc.max_receive_message_length': 10 * 1024 * 1024,
     };
-    if (targetOverrides) {
-      clientOptions['grpc.ssl_target_name_override'] = targetOverrides.sslTargetNameOverride; // Use hostname for TLS verification
+    const serverName = settings.platform.grpcServerName?.trim();
+    if (serverName) {
+      clientOptions['grpc.ssl_target_name_override'] = serverName;
+      clientOptions['grpc.default_authority'] = serverName;
+      out.appendLine(
+        `[platform] gRPC client options: ssl_target_name_override=${serverName} default_authority=${serverName} (from grpcServerName setting)`
+      );
+    } else if (targetOverrides) {
+      clientOptions['grpc.ssl_target_name_override'] = targetOverrides.sslTargetNameOverride;
       clientOptions['grpc.default_authority'] = targetOverrides.defaultAuthority;
       out.appendLine(
         `[platform] gRPC client options: ssl_target_name_override=${targetOverrides.sslTargetNameOverride} default_authority=${targetOverrides.defaultAuthority}`
@@ -207,13 +287,24 @@ class PlatformClient {
     const { security } = settings;
 
     if (endpoint.startsWith('localhost') || endpoint.startsWith('127.0.0.1') || endpoint.startsWith('[::1]')) {
+      if (security.caPath) {
+        out.appendLine('[platform] creating secure gRPC client for local development (custom CA)');
+        const combinedCA = await loadCombinedCAsBuffer(security.caPath);
+        return grpc.credentials.createSsl(combinedCA);
+      }
       out.appendLine('[platform] creating insecure gRPC client for local development');
       return grpc.credentials.createInsecure();
     }
 
     if (security.rejectUnauthorized === false) {
-      out.appendLine('[platform] creating insecure gRPC client (TLS verification disabled by settings)');
-      return grpc.credentials.createInsecure();
+      out.appendLine('[platform] creating gRPC client with TLS (certificate verification disabled by settings)');
+      const combinedCA = await loadCombinedCAsBuffer(security.caPath);
+      return grpc.credentials.createSsl(
+        combinedCA ?? undefined,
+        undefined,
+        undefined,
+        { checkServerIdentity: () => undefined },
+      );
     }
 
     // Use shared utility to combine system CAs with custom CA
@@ -245,7 +336,7 @@ class PlatformClient {
     return trimmed;
   }
 
-  async listWorkspaces(): Promise<WorkspaceSummary[]> {
+  async listProjects(): Promise<Array<{ id: string; displayName: string }>> {
     this.ensureSettingsPresent();
     await this.ensureClients();
     if (!this.client) {
@@ -255,39 +346,92 @@ class PlatformClient {
     if (!session) {
       throw new Error('Aegis sign-in required.');
     }
-    const projectId = this.settings?.platform.projectId?.trim();
-    if (!projectId) {
-      throw new Error('Configure "aegisRemote.platform.projectId" in settings.');
-    }
-
-    const metadata = this.buildMetadata(session);
-    return new Promise<WorkspaceSummary[]>((resolve, reject) => {
-      this.client!.ListWorkloads({ project_id: projectId }, metadata, (err, response) => {
+    return new Promise<Array<{ id: string; displayName: string }>>((resolve, reject) => {
+      const metadata = this.buildMetadata(session);
+      this.client!.ListProjects({}, metadata, (err, response) => {
         if (err) {
-          if ((err as grpc.ServiceError)?.code === grpc.status.NOT_FOUND) {
-            out.appendLine(`[platform] project ${projectId} not found; treating as empty workspace list`);
-            resolve([]);
-            return;
-          }
           reject(err);
           return;
         }
-        const workspaces = (response?.items ?? []).map((item: any) => {
-          const ws = item?.workspace;
-          return {
-            id: item?.id ?? '',
-            name: item?.id ?? 'workspace',
-            cluster: item?.cluster_id,
-            dns: ws?.env?.DNS,
-            profile: ws?.profile ?? undefined,
-            persona: ws?.persona ?? undefined,
-            status: item?.status ?? undefined,
-            uiStatus: item?.ui_status ?? undefined,
-          } as WorkspaceSummary;
-        }).filter((ws) => ws.id);
-        resolve(workspaces);
+        const projects = (response?.items ?? []).map((item) => ({
+          id: item?.id ?? '',
+          displayName: item?.display_name ?? item?.id ?? '',
+        })).filter((p) => p.id);
+        resolve(projects);
       });
     });
+  }
+
+  async listWorkspaces(projectIdOverride?: string): Promise<WorkspaceSummary[]> {
+    this.ensureSettingsPresent();
+    await this.ensureClients();
+    if (!this.client) {
+      return [];
+    }
+    const session = await requireSession(true);
+    if (!session) {
+      throw new Error('Aegis sign-in required.');
+    }
+    const projectId = projectIdOverride || this.settings?.platform.projectId?.trim();
+    if (!projectId) {
+      // No project configured — list from all projects via listProjects + per-project listing
+      const projects = await this.listProjects();
+      if (projects.length === 0) {
+        return [];
+      }
+      const allWorkspaces: WorkspaceSummary[] = [];
+      for (const project of projects) {
+        const ws = await this.listWorkspaces(project.id);
+        allWorkspaces.push(...ws);
+      }
+      return allWorkspaces;
+    }
+
+    const fetchWorkspaces = async (activeSession: vscode.AuthenticationSession) =>
+      new Promise<WorkspaceSummary[]>((resolve, reject) => {
+        const metadata = this.buildMetadata(activeSession);
+        this.client!.ListWorkloads({ project_id: projectId }, metadata, (err, response) => {
+          if (err) {
+            if ((err as grpc.ServiceError)?.code === grpc.status.NOT_FOUND) {
+              out.appendLine(`[platform] project ${projectId} not found; treating as empty workspace list`);
+              resolve([]);
+              return;
+            }
+            reject(err);
+            return;
+          }
+          const workspaces = (response?.items ?? []).map((item: any) => {
+            const ws = item?.workspace;
+            return {
+              id: item?.id ?? '',
+              name: item?.id ?? 'workspace',
+              cluster: item?.cluster_id,
+              dns: ws?.env?.DNS,
+              profile: ws?.profile ?? undefined,
+              persona: ws?.persona ?? undefined,
+              status: item?.status ?? undefined,
+              uiStatus: item?.ui_status ?? undefined,
+              workspaceRoot: ws?.env?.WORKSPACE_ROOT || '/home/aegis/work',
+            } as WorkspaceSummary;
+          }).filter((ws) => ws.id);
+          resolve(workspaces);
+        });
+      });
+
+    try {
+      return await fetchWorkspaces(session);
+    } catch (err) {
+      if (!isUnauthenticatedError(err)) {
+        throw err;
+      }
+      out.appendLine('[platform] ListWorkloads returned UNAUTHENTICATED, clearing cached auth session and retrying once');
+      await signOut().catch(() => undefined);
+      const refreshed = await requireSession(true);
+      if (!refreshed) {
+        throw err;
+      }
+      return fetchWorkspaces(refreshed);
+    }
   }
 
   async issueProxyTicket(wid: string): Promise<ProxyTicket> {
@@ -358,50 +502,73 @@ class PlatformClient {
       watchState(currentState);
     }
 
-    return new Promise<ProxyTicket>((resolve, reject) => {
-      const call = this.client!.CreateConnectionSession({ workload_id: wid, client: 'vscode' }, metadata, { deadline }, (err, response) => {
-        out.appendLine(`[platform] CreateConnectionSession callback received`);
-        if (err) {
-          out.appendLine(`[platform] CreateConnectionSession error: ${err.message} (code: ${err.code})`);
-          if (err.details) {
-            out.appendLine(`[platform] CreateConnectionSession details: ${err.details}`);
-          }
-          reject(err);
-          return;
-        }
-        if (!response?.proxy_url || !response.token) {
-          reject(new Error('Platform returned an incomplete proxy ticket.'));
-          return;
-        }
-        if (response.session_id) {
-          currentSessionId = response.session_id;
-          out.appendLine(`[platform] stored session_id=${response.session_id}`);
-        }
-        const ticket: ProxyTicket = {
-          proxyUrl: response.proxy_url,
-          jwt: response.token,
-          ttlSeconds: 0,
-          caPem: undefined,
-          certPem: undefined,
-          keyPem: undefined,
-          serverName: undefined,
-          jti: response.jti,
-          dest: undefined,
-          dns: undefined,
-          groups: undefined,
-        };
-        const expiresAt = response.expires_at_utc ? response.expires_at_utc : undefined;
-        lastTicketSummary = {
-          proxyUrl: ticket.proxyUrl,
-          expiresAt,
-          hasClientCert: false,
-          jti: ticket.jti,
-          dest: ticket.dest,
-          serverName: ticket.serverName,
-        };
-        resolve(ticket);
+    const createSession = async (activeSession: vscode.AuthenticationSession) =>
+      new Promise<ProxyTicket>((resolve, reject) => {
+        const activeMetadata = this.buildMetadata(activeSession);
+        this.client!.CreateConnectionSession(
+          { workload_id: wid, client: 'vscode' },
+          activeMetadata,
+          { deadline },
+          (err, response) => {
+            out.appendLine(`[platform] CreateConnectionSession callback received`);
+            if (err) {
+              out.appendLine(`[platform] CreateConnectionSession error: ${err.message} (code: ${err.code})`);
+              if (err.details) {
+                out.appendLine(`[platform] CreateConnectionSession details: ${err.details}`);
+              }
+              reject(err);
+              return;
+            }
+            if (!response?.proxy_url || !response.token) {
+              reject(new Error('Platform returned an incomplete proxy ticket.'));
+              return;
+            }
+            if (response.session_id) {
+              currentSessionId = response.session_id;
+              out.appendLine(`[platform] stored session_id=${response.session_id}`);
+            }
+            const ticket: ProxyTicket = {
+              proxyUrl: response.proxy_url,
+              jwt: response.token,
+              ttlSeconds: 0,
+              caPem: response.proxy_ca_pem || undefined,
+              certPem: undefined,
+              keyPem: undefined,
+              serverName: undefined,
+              jti: response.jti,
+              dest: undefined,
+              dns: undefined,
+              groups: undefined,
+              workspaceRoot: response.workspace_root || undefined,
+            };
+            const expiresAt = response.expires_at_utc ? response.expires_at_utc : undefined;
+            lastTicketSummary = {
+              proxyUrl: ticket.proxyUrl,
+              expiresAt,
+              hasClientCert: false,
+              jti: ticket.jti,
+              dest: ticket.dest,
+              serverName: ticket.serverName,
+            };
+            resolve(ticket);
+          },
+        );
       });
-    });
+
+    try {
+      return await createSession(session);
+    } catch (err) {
+      if (!isUnauthenticatedError(err)) {
+        throw err;
+      }
+      out.appendLine('[platform] CreateConnectionSession returned UNAUTHENTICATED, clearing cached auth session and retrying once');
+      await signOut().catch(() => undefined);
+      const refreshed = await requireSession(true);
+      if (!refreshed) {
+        throw err;
+      }
+      return createSession(refreshed);
+    }
   }
 
   async renewConnectionSession(sessionId: string): Promise<RenewedTicket> {

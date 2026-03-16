@@ -4,28 +4,51 @@ import { out, status, WorkspacesProvider } from './ui';
 import { AegisResolver, forceReconnect, getLastConnection, revokeCurrentSession } from './resolver';
 import { registerDiagnostics } from './diagnostics';
 import { getSettings, onDidChangeSettings } from './config';
-import { handleAuthUri, initializeAuth, requireSession, signOut } from './auth';
-import { initializePlatform, refreshPlatformSettings } from './platform';
+import { handleAuthUri, initializeAuth, requireSession, signOut, clearAllSecrets } from './auth';
+import { initializePlatform, refreshPlatformSettings, fetchPlatformRootCA } from './platform';
 import { configureHttpSecurity, disposeHttpSecurity } from './http';
+import { isSecureMode, redactSettings } from './secure-mode';
+import { promises as fs } from 'fs';
+import * as path from 'path';
+
+let extensionContext: vscode.ExtensionContext | undefined;
 
 export async function activate(ctx: vscode.ExtensionContext) {
+  extensionContext = ctx;
   out.appendLine('Aegis Remote activated');
+  if (isSecureMode()) {
+    out.appendLine('[secure-mode] ACTIVE — ephemeral tokens, TLS enforced, log level clamped');
+  }
   status.set('$(circle-outline) Aegis: Idle');
 
-  // Warn if not running VS Code Insiders (proposed APIs require it)
-  if (!vscode.env.appName.includes('Insiders')) {
-    vscode.window.showWarningMessage(
-      'Aegis Remote requires VS Code Insiders with proposed APIs enabled. ' +
-      'Please see the setup guide: https://github.com/aegis-platform/sovran/blob/main/SETUP_INSIDERS.md',
-      'Open Setup Guide'
-    ).then(selection => {
-      if (selection === 'Open Setup Guide') {
-        vscode.env.openExternal(vscode.Uri.parse('https://github.com/aegis-platform/sovran/blob/main/SETUP_INSIDERS.md'));
+  const initialSettings = getSettings();
+
+  // Auto-fetch platform root CA if no caPath is configured.
+  // Uses HTTPS (system CAs validate ingress cert) to bootstrap trust.
+  // Cached in extension storage for subsequent launches.
+  if (!initialSettings.security.caPath && initialSettings.platform.grpcEndpoint) {
+    const cachedCA = ctx.globalState.get<string>('aegis.cachedRootCA');
+    if (cachedCA) {
+      out.appendLine(`[platform] using cached root CA (${cachedCA.length} bytes)`);
+      const caDir = path.join(ctx.globalStorageUri.fsPath);
+      await fs.mkdir(caDir, { recursive: true });
+      const caFile = path.join(caDir, 'platform-root-ca.pem');
+      await fs.writeFile(caFile, cachedCA);
+      initialSettings.security.caPath = caFile;
+    } else {
+      const ca = await fetchPlatformRootCA(initialSettings.platform.grpcEndpoint);
+      if (ca) {
+        await ctx.globalState.update('aegis.cachedRootCA', ca);
+        const caDir = path.join(ctx.globalStorageUri.fsPath);
+        await fs.mkdir(caDir, { recursive: true });
+        const caFile = path.join(caDir, 'platform-root-ca.pem');
+        await fs.writeFile(caFile, ca);
+        initialSettings.security.caPath = caFile;
+        out.appendLine(`[platform] auto-configured CA trust from platform PKI endpoint`);
       }
-    });
+    }
   }
 
-  const initialSettings = getSettings();
   await configureHttpSecurity(initialSettings.security);
 
   await initializeAuth(ctx);
@@ -90,7 +113,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
           out.appendLine(`[uri-handler] authenticated as ${session.account.label}`);
 
           // Open the workspace in a new window
-          const remoteUri = vscode.Uri.parse(`vscode-remote://aegis+${workspaceId}/home/project`);
+          const remoteUri = vscode.Uri.parse(`vscode-remote://aegis+${workspaceId}/home/aegis/work`);
           await vscode.commands.executeCommand('vscode.openFolder', remoteUri, { forceNewWindow: true });
         } else {
           out.appendLine(`[uri-handler] unrecognized URI format: ${uri.path}`);
@@ -102,7 +125,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
   ctx.subscriptions.push(
     onDidChangeSettings(async () => {
       const cfg = getSettings();
-      out.appendLine('[settings] updated ' + JSON.stringify(cfg));
+      out.appendLine('[settings] updated ' + JSON.stringify(redactSettings(cfg)));
       await configureHttpSecurity(cfg.security);
       await refreshPlatformSettings();
       provider.refresh();
@@ -118,7 +141,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
     vscode.commands.registerCommand('aegis.reconnect', () => {
       forceReconnect();
     }),
-    vscode.commands.registerCommand('aegis.connect', async (wid?: string) => {
+    vscode.commands.registerCommand('aegis.connect', async (wid?: string, wsRoot?: string) => {
       await requireSession(true);
       const settings = getSettings();
       const workspaceId = wid || settings.defaultWorkspaceId;
@@ -126,7 +149,8 @@ export async function activate(ctx: vscode.ExtensionContext) {
         vscode.window.showErrorMessage('Select a workspace to connect.');
         return;
       }
-      const uri = vscode.Uri.parse(`vscode-remote://aegis+${workspaceId}/home/project`);
+      const root = wsRoot || '/home/aegis/work';
+      const uri = vscode.Uri.parse(`vscode-remote://aegis+${workspaceId}${root}`);
       await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
     }),
     vscode.commands.registerCommand('aegis.refreshWorkspaces', () => provider.refresh()),
@@ -144,7 +168,12 @@ export async function activate(ctx: vscode.ExtensionContext) {
 export function deactivate() {
   // Best-effort revocation of the connection session on extension shutdown.
   // VS Code allows deactivate() to return a promise with a short timeout.
-  return revokeCurrentSession().catch(() => {
+  const revoke = revokeCurrentSession().catch(() => {
     // Swallow errors — this is best-effort cleanup on shutdown
   });
+
+  if (isSecureMode() && extensionContext) {
+    return revoke.then(() => clearAllSecrets(extensionContext!).catch(() => {}));
+  }
+  return revoke;
 }
