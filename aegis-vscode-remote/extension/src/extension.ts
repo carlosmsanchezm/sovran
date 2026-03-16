@@ -5,7 +5,7 @@ import { AegisResolver, forceReconnect, getLastConnection, revokeCurrentSession 
 import { registerDiagnostics } from './diagnostics';
 import { getSettings, onDidChangeSettings } from './config';
 import { handleAuthUri, initializeAuth, requireSession, signOut, clearAllSecrets } from './auth';
-import { initializePlatform, refreshPlatformSettings, fetchPlatformRootCA, fetchDiscovery } from './platform';
+import { initializePlatform, refreshPlatformSettings, fetchDiscovery } from './platform';
 import { configureHttpSecurity, disposeHttpSecurity } from './http';
 import { isSecureMode, redactSettings } from './secure-mode';
 import { promises as fs } from 'fs';
@@ -36,6 +36,25 @@ export async function activate(ctx: vscode.ExtensionContext) {
         initialSettings.auth.clientId = discovery.auth?.client_id ?? initialSettings.auth.clientId;
         out.appendLine(`[discovery] auto-configured: grpc=${discovery.grpc_endpoint}, auth=${discovery.auth?.authority}`);
 
+        // Extract CA from discovery response (inline, no separate fetch needed)
+        if (discovery.pki?.root_ca_pem) {
+          const caDir = path.join(ctx.globalStorageUri.fsPath);
+          await fs.mkdir(caDir, { recursive: true });
+          const caFile = path.join(caDir, 'platform-root-ca.pem');
+          await fs.writeFile(caFile, discovery.pki.root_ca_pem);
+          initialSettings.security.caPath = caFile;
+          await ctx.globalState.update('aegis.cachedRootCA', discovery.pki.root_ca_pem);
+          out.appendLine(`[discovery] root CA obtained inline (${discovery.pki.root_ca_pem.length} bytes)`);
+        }
+
+        // Write discovered values to VS Code config so PlatformClient picks them up
+        const cfg = vscode.workspace.getConfiguration('aegisRemote');
+        await cfg.update('platform.grpcEndpoint', discovery.grpc_endpoint, vscode.ConfigurationTarget.Workspace);
+        await cfg.update('auth.authority', discovery.auth?.authority, vscode.ConfigurationTarget.Workspace);
+        if (discovery.auth?.client_id) {
+          await cfg.update('auth.clientId', discovery.auth.client_id, vscode.ConfigurationTarget.Workspace);
+        }
+
         // Cache discovery for offline use
         await ctx.globalState.update('aegis.discovery', JSON.stringify(discovery));
       }
@@ -50,15 +69,18 @@ export async function activate(ctx: vscode.ExtensionContext) {
           initialSettings.auth.authority = discovery.auth?.authority ?? '';
           initialSettings.auth.clientId = discovery.auth?.client_id ?? initialSettings.auth.clientId;
           out.appendLine(`[discovery] using cached configuration`);
+
+          // Write cached values to VS Code config
+          const cfg = vscode.workspace.getConfiguration('aegisRemote');
+          await cfg.update('platform.grpcEndpoint', discovery.grpc_endpoint, vscode.ConfigurationTarget.Workspace);
+          await cfg.update('auth.authority', discovery.auth?.authority, vscode.ConfigurationTarget.Workspace);
         } catch { /* ignore parse errors */ }
       }
     }
   }
 
-  // Auto-fetch platform root CA if no caPath is configured.
-  // Uses HTTPS (system CAs validate ingress cert) to bootstrap trust.
-  const caSource = platformUrl || initialSettings.platform.grpcEndpoint;
-  if (!initialSettings.security.caPath && caSource) {
+  // If CA wasn't obtained from discovery, try cached CA from previous session
+  if (!initialSettings.security.caPath) {
     const cachedCA = ctx.globalState.get<string>('aegis.cachedRootCA');
     if (cachedCA) {
       out.appendLine(`[platform] using cached root CA (${cachedCA.length} bytes)`);
@@ -67,17 +89,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
       const caFile = path.join(caDir, 'platform-root-ca.pem');
       await fs.writeFile(caFile, cachedCA);
       initialSettings.security.caPath = caFile;
-    } else {
-      const ca = await fetchPlatformRootCA(caSource);
-      if (ca) {
-        await ctx.globalState.update('aegis.cachedRootCA', ca);
-        const caDir = path.join(ctx.globalStorageUri.fsPath);
-        await fs.mkdir(caDir, { recursive: true });
-        const caFile = path.join(caDir, 'platform-root-ca.pem');
-        await fs.writeFile(caFile, ca);
-        initialSettings.security.caPath = caFile;
-        out.appendLine(`[platform] auto-configured CA trust from platform PKI endpoint`);
-      }
     }
   }
 

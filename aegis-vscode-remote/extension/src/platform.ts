@@ -159,15 +159,17 @@ function isUnauthenticatedError(err: unknown): boolean {
 export async function fetchDiscovery(platformUrl: string): Promise<{
   grpc_endpoint: string;
   auth?: { authority?: string; client_id?: string };
-  pki?: { root_ca_url?: string };
+  pki?: { root_ca_pem?: string };
 } | undefined> {
   try {
-    const url = `https://${platformUrl}/api/v1/discovery`;
+    // Use HTTPS by default, fall back to HTTP if the URL contains a port (likely direct NLB access)
+    const scheme = platformUrl.includes(':') ? 'http' : 'https';
+    const url = `${scheme}://${platformUrl}/api/v1/discovery`;
     out.appendLine(`[discovery] fetching from ${url}`);
 
-    const https = await import('https');
+    const httpModule = scheme === 'https' ? await import('https') : await import('http');
     return new Promise((resolve) => {
-      const req = https.get(url, { timeout: 10000 }, (res) => {
+      const req = httpModule.get(url, { timeout: 10000 }, (res) => {
         if (res.statusCode !== 200) {
           out.appendLine(`[discovery] fetch failed: HTTP ${res.statusCode}`);
           resolve(undefined);
@@ -209,13 +211,15 @@ export async function fetchDiscovery(platformUrl: string): Promise<{
 
 export async function fetchPlatformRootCA(grpcEndpoint: string): Promise<string | undefined> {
   try {
-    const host = grpcEndpoint.split(':')[0];
-    const pkiUrl = `https://${host}/api/v1/pki/root-ca`;
+    // Use HTTP when port is specified (direct NLB/service access), HTTPS otherwise (ingress)
+    const scheme = grpcEndpoint.includes(':') ? 'http' : 'https';
+    const host = scheme === 'http' ? grpcEndpoint : grpcEndpoint.split(':')[0];
+    const pkiUrl = `${scheme}://${host}/api/v1/pki/root-ca`;
     out.appendLine(`[platform] fetching root CA from ${pkiUrl}`);
 
-    const https = await import('https');
+    const httpModule = scheme === 'https' ? await import('https') : await import('http');
     return new Promise<string | undefined>((resolve) => {
-      const req = https.get(pkiUrl, { timeout: 10000 }, (res) => {
+      const req = httpModule.get(pkiUrl, { timeout: 10000 }, (res) => {
         if (res.statusCode !== 200) {
           out.appendLine(`[platform] root CA fetch failed: HTTP ${res.statusCode}`);
           resolve(undefined);
