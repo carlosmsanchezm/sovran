@@ -3,6 +3,7 @@ import { getSettings } from './config';
 import { ConnectionManager } from './connection';
 import { out } from './ui';
 import { getLastProxyTicketSummary } from './platform';
+import { redactSettings } from './secure-mode';
 
 export function registerDiagnostics(ctx: vscode.ExtensionContext, getConnection: () => ConnectionManager | undefined) {
   ctx.subscriptions.push(
@@ -11,7 +12,7 @@ export function registerDiagnostics(ctx: vscode.ExtensionContext, getConnection:
       const metrics = getConnection()?.getMetrics();
 
       out.show(true);
-      out.appendLine('[diag] settings=' + JSON.stringify(settings));
+      out.appendLine('[diag] settings=' + JSON.stringify(redactSettings(settings)));
       if (metrics) {
         out.appendLine('[diag] metrics=' + JSON.stringify(metrics));
       } else {

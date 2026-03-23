@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { out, status, WorkspacesProvider } from './ui';
 import { AegisResolver, forceReconnect, getLastConnection, revokeCurrentSession } from './resolver';
 import { registerDiagnostics } from './diagnostics';
-import { getSettings, onDidChangeSettings } from './config';
+import { getSettings, onDidChangeSettings, setDiscoveryOverrides } from './config';
 import { handleAuthUri, initializeAuth, requireSession, signOut, clearAllSecrets } from './auth';
 import { initializePlatform, refreshPlatformSettings, fetchDiscovery } from './platform';
 import { configureHttpSecurity, disposeHttpSecurity } from './http';
@@ -20,6 +20,11 @@ export async function activate(ctx: vscode.ExtensionContext) {
     out.appendLine('[secure-mode] ACTIVE — ephemeral tokens, TLS enforced, log level clamped');
   }
   status.set('$(circle-outline) Aegis: Idle');
+
+  // Register the remote authority resolver FIRST so VS Code can resolve
+  // vscode-remote://aegis+wid URIs without waiting for discovery/auth to finish.
+  // The resolver handles its own session acquisition internally.
+  ctx.subscriptions.push(vscode.workspace.registerRemoteAuthorityResolver('aegis', AegisResolver));
 
   const initialSettings = getSettings();
 
@@ -47,13 +52,13 @@ export async function activate(ctx: vscode.ExtensionContext) {
           out.appendLine(`[discovery] root CA obtained inline (${discovery.pki.root_ca_pem.length} bytes)`);
         }
 
-        // Write discovered values to VS Code config so PlatformClient picks them up
-        const cfg = vscode.workspace.getConfiguration('aegisRemote');
-        await cfg.update('platform.grpcEndpoint', discovery.grpc_endpoint, vscode.ConfigurationTarget.Workspace);
-        await cfg.update('auth.authority', discovery.auth?.authority, vscode.ConfigurationTarget.Workspace);
-        if (discovery.auth?.client_id) {
-          await cfg.update('auth.clientId', discovery.auth.client_id, vscode.ConfigurationTarget.Workspace);
-        }
+        // Set discovery overrides so PlatformClient picks them up via getSettings()
+        setDiscoveryOverrides({
+          grpcEndpoint: discovery.grpc_endpoint,
+          authAuthority: discovery.auth?.authority,
+          authClientId: discovery.auth?.client_id,
+          caPath: initialSettings.security.caPath || undefined,
+        });
 
         // Cache discovery for offline use
         await ctx.globalState.update('aegis.discovery', JSON.stringify(discovery));
@@ -70,12 +75,33 @@ export async function activate(ctx: vscode.ExtensionContext) {
           initialSettings.auth.clientId = discovery.auth?.client_id ?? initialSettings.auth.clientId;
           out.appendLine(`[discovery] using cached configuration`);
 
-          // Write cached values to VS Code config
-          const cfg = vscode.workspace.getConfiguration('aegisRemote');
-          await cfg.update('platform.grpcEndpoint', discovery.grpc_endpoint, vscode.ConfigurationTarget.Workspace);
-          await cfg.update('auth.authority', discovery.auth?.authority, vscode.ConfigurationTarget.Workspace);
+          setDiscoveryOverrides({
+            grpcEndpoint: discovery.grpc_endpoint,
+            authAuthority: discovery.auth?.authority,
+            authClientId: discovery.auth?.client_id,
+          });
         } catch { /* ignore parse errors */ }
       }
+    }
+  }
+
+  // If no discovery ran (remote window without workspace settings), try cached discovery
+  if (!initialSettings.platform.grpcEndpoint && !platformUrl) {
+    const cached = ctx.globalState.get<string>('aegis.discovery');
+    if (cached) {
+      try {
+        const discovery = JSON.parse(cached);
+        initialSettings.platform.grpcEndpoint = discovery.grpc_endpoint;
+        initialSettings.auth.authority = discovery.auth?.authority ?? '';
+        initialSettings.auth.clientId = discovery.auth?.client_id ?? initialSettings.auth.clientId;
+        out.appendLine(`[discovery] restored from cache: grpc=${discovery.grpc_endpoint}`);
+
+        setDiscoveryOverrides({
+          grpcEndpoint: discovery.grpc_endpoint,
+          authAuthority: discovery.auth?.authority,
+          authClientId: discovery.auth?.client_id,
+        });
+      } catch { /* ignore */ }
     }
   }
 
@@ -89,6 +115,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
       const caFile = path.join(caDir, 'platform-root-ca.pem');
       await fs.writeFile(caFile, cachedCA);
       initialSettings.security.caPath = caFile;
+      setDiscoveryOverrides({ caPath: caFile });
     }
   }
 
@@ -99,7 +126,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
   ctx.subscriptions.push(new vscode.Disposable(() => { void disposeHttpSecurity(); }));
 
-  ctx.subscriptions.push(vscode.workspace.registerRemoteAuthorityResolver('aegis', AegisResolver));
   registerDiagnostics(ctx, getLastConnection);
 
   const provider = new WorkspacesProvider(ctx);
@@ -156,7 +182,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
           out.appendLine(`[uri-handler] authenticated as ${session.account.label}`);
 
           // Open the workspace in a new window
-          const remoteUri = vscode.Uri.parse(`vscode-remote://aegis+${workspaceId}/home/aegis/work`);
+          const remoteUri = vscode.Uri.parse(`vscode-remote://aegis+${workspaceId}/home/aegis`);
           await vscode.commands.executeCommand('vscode.openFolder', remoteUri, { forceNewWindow: true });
         } else {
           out.appendLine(`[uri-handler] unrecognized URI format: ${uri.path}`);
@@ -192,7 +218,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
         vscode.window.showErrorMessage('Select a workspace to connect.');
         return;
       }
-      const root = wsRoot || '/home/aegis/work';
+      const root = wsRoot || '/home/aegis';
       const uri = vscode.Uri.parse(`vscode-remote://aegis+${workspaceId}${root}`);
       await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
     }),

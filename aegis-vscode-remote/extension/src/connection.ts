@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import WebSocket from 'ws';
 import { LogLevel } from './config';
 import { categorizeConnectionError, categorizeCloseCode, type CloseInfo } from './errors';
+import { isSecureMode } from './secure-mode';
 
 export interface Managed {
   readonly onDidReceiveMessage: vscode.Event<Uint8Array>;
@@ -81,16 +82,22 @@ export class ConnectionManager {
       ws.on('unexpected-response', (_req, res) => {
         const status = res.statusCode ?? 0;
         this.opts.log(`[conn] unexpected response status=${status}`);
+        if (isSecureMode()) {
+          // In secure mode, suppress response body entirely
+          res.resume();
+          return;
+        }
         let body = '';
+        const bodyLimit = 256;
         res.on('data', (chunk) => {
-          if (body.length > 4096) {
+          if (body.length > bodyLimit) {
             return;
           }
           body += chunk instanceof Buffer ? chunk.toString('utf8') : String(chunk);
         });
         res.on('end', () => {
           if (body) {
-            const snippet = body.length > 4096 ? `${body.slice(0, 4096)}…` : body;
+            const snippet = body.length > bodyLimit ? `${body.slice(0, bodyLimit)}…` : body;
             this.opts.log(`[conn] unexpected response body=${snippet}`);
           }
         });
@@ -185,8 +192,7 @@ export class ConnectionManager {
         this.metrics.lastMessageAt = this.lastRxAt;
         this.metrics.bytesRx += buf.length;
         if (this.opts.logLevel === 'trace') {
-          const preview = buf.length > 64 ? `${buf.slice(0, 64).toString('hex')}…` : buf.toString('hex');
-          this.debug(`[conn] rx ${buf.length}b ${preview}`);
+          this.debug(`[conn] rx ${buf.length}b`);
         }
         onRx.fire(buf);
       });

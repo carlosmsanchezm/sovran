@@ -37,6 +37,19 @@ export interface AegisSettings {
   isSecureMode: boolean;
 }
 
+// Discovery overrides — set programmatically, merged into getSettings() results.
+// These take precedence over VS Code config values when set.
+let discoveryOverrides: Partial<{
+  grpcEndpoint: string;
+  authAuthority: string;
+  authClientId: string;
+  caPath: string;
+}> = {};
+
+export function setDiscoveryOverrides(overrides: typeof discoveryOverrides) {
+  discoveryOverrides = { ...discoveryOverrides, ...overrides };
+}
+
 export function getSettings(): AegisSettings {
   const cfg = vscode.workspace.getConfiguration('aegisRemote');
   const secure = isSecureMode();
@@ -49,15 +62,15 @@ export function getSettings(): AegisSettings {
   return {
     platform: {
       url: cfg.get('platform.url', ''),
-      grpcEndpoint: cfg.get('platform.grpcEndpoint', ''),
+      grpcEndpoint: discoveryOverrides.grpcEndpoint || cfg.get('platform.grpcEndpoint', ''),
       grpcServerName: cfg.get('platform.grpcServerName', ''),
       namespace: cfg.get('platform.namespace', 'default'),
       authScope: cfg.get('platform.authScope', 'aegis-platform'),
       projectId: cfg.get('platform.projectId', ''),
     },
     auth: {
-      authority: cfg.get('auth.authority', ''),
-      clientId: cfg.get('auth.clientId', ''),
+      authority: discoveryOverrides.authAuthority || cfg.get('auth.authority', ''),
+      clientId: discoveryOverrides.authClientId || cfg.get('auth.clientId', ''),
       redirectUri: cfg.get('auth.redirectUri', 'vscode://aegis.aegis-remote/auth'),
       scopes,
       prompt: cfg.get('auth.prompt', ''),
@@ -68,7 +81,7 @@ export function getSettings(): AegisSettings {
     security: {
       rejectUnauthorized: secure ? true : cfg.get('security.rejectUnauthorized', true),
       mtlsSource: cfg.get('security.mtlsSource', 'platform'),
-      caPath: cfg.get('security.caPath', ''),
+      caPath: discoveryOverrides.caPath || cfg.get('security.caPath', ''),
     },
     logLevel: clampLogLevel(cfg.get('logLevel', 'info')),
     isSecureMode: secure,

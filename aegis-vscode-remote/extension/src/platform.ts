@@ -471,7 +471,7 @@ class PlatformClient {
               persona: ws?.persona ?? undefined,
               status: item?.status ?? undefined,
               uiStatus: item?.ui_status ?? undefined,
-              workspaceRoot: ws?.env?.WORKSPACE_ROOT || '/home/aegis/work',
+              workspaceRoot: ws?.env?.WORKSPACE_ROOT || '/home/aegis',
             } as WorkspaceSummary;
           }).filter((ws) => ws.id);
           resolve(workspaces);

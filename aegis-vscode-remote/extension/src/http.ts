@@ -4,6 +4,7 @@ import type Dispatcher from 'undici/types/dispatcher';
 import type { SecuritySettings } from './config';
 import { out } from './ui';
 import { getCombinedCAsArray } from './tls';
+import { isSecureMode } from './secure-mode';
 
 let originalDispatcher: Dispatcher | undefined;
 let customAgent: Agent | undefined;
@@ -53,9 +54,13 @@ export async function configureHttpSecurity(security: SecuritySettings): Promise
   }
 
   if (security.rejectUnauthorized === false) {
-    connectOptions.rejectUnauthorized = false;
-    useCustomAgent = true;
-    out.appendLine('[http] TLS verification disabled for HTTP requests');
+    if (isSecureMode()) {
+      out.appendLine('[http] WARNING: rejectUnauthorized=false ignored in secure mode — TLS verification enforced');
+    } else {
+      connectOptions.rejectUnauthorized = false;
+      useCustomAgent = true;
+      out.appendLine('[http] TLS verification disabled for HTTP requests');
+    }
   }
 
   if (!useCustomAgent) {

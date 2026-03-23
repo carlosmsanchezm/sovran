@@ -4,8 +4,67 @@ controls:
     code_targets:
       - path: "aegis-vscode-remote/extension/src/auth.ts"
       - path: "aegis-vscode-remote/extension/src/connection.ts"
+  AC-3:
+    description: "Access Enforcement"
+    notes: "TLS enforcement and logLevel clamping in secure mode"
+    code_targets:
+      - path: "aegis-vscode-remote/extension/src/config.ts"
+        detail: "getSettings() forces rejectUnauthorized=true and clamps logLevel in secure mode"
+      - path: "aegis-vscode-remote/extension/src/http.ts"
+        detail: "Defense-in-depth: ignores rejectUnauthorized=false in secure mode"
+  AC-11:
+    description: "Device Lock / Session Lock"
+    status: "P1 — placeholder"
+    notes: "User-inactivity timeout not yet implemented. See docs/compliance-roadmap.md"
+  AU-3:
+    description: "Content of Audit Records"
+    notes: "Log sanitization prevents CUI leakage in audit records"
+    code_targets:
+      - path: "aegis-vscode-remote/extension/src/secure-mode.ts"
+        detail: "redactUrl() strips query params and JWTs; redactSettings() masks auth details"
+      - path: "aegis-vscode-remote/extension/src/connection.ts"
+        detail: "Hex payload preview removed unconditionally; response body suppressed in secure mode"
+      - path: "aegis-vscode-remote/extension/src/diagnostics.ts"
+        detail: "Settings dump uses redactSettings()"
+      - path: "aegis-vscode-remote/extension/src/extension.ts"
+        detail: "Settings change log uses redactSettings()"
+  IA-2:
+    description: "Identification and Authentication"
+    notes: "OIDC/PKCE flow via Keycloak; PIV/CAC support via browser-based X.509 (requires Keycloak config)"
+    code_targets:
+      - path: "aegis-vscode-remote/extension/src/auth.ts"
+        detail: "PKCE S256 + OAuth state; automation session disabled in secure mode"
+  MP-7:
+    description: "Media Use"
+    notes: "Launcher verifies FDE and creates RAM disk for ephemeral storage"
+    code_targets:
+      - path: "aegis-vscode-remote/launcher/aegis-secure-launch.sh"
+        detail: "macOS: FileVault check, hdiutil RAM disk, cleanup on exit"
+      - path: "aegis-vscode-remote/launcher/aegis-secure-launch-linux.sh"
+        detail: "Linux: LUKS check, tmpfs mount, cleanup on exit"
+  SC-8:
+    description: "Transmission Confidentiality and Integrity"
+    notes: "TLS enforced on all channels (WSS, gRPC)"
+    code_targets:
+      - path: "aegis-vscode-remote/extension/src/config.ts"
+        detail: "rejectUnauthorized forced true in secure mode"
+      - path: "aegis-vscode-remote/extension/src/http.ts"
+        detail: "rejectUnauthorized=false ignored in secure mode"
+      - path: "aegis-vscode-remote/extension/src/resolver.ts"
+        detail: "All proxy connections use wss://"
   SC-13:
     description: "Cryptographic Protection"
+    notes: "FIPS gap: Node.js crypto not FIPS-validated. See docs/compliance-roadmap.md for POA&M."
     code_targets:
       - path: "aegis-vscode-remote/extension/src/resolver.ts"
       - path: "aegis-vscode-remote/proxy/src/server.ts"
+  SC-28:
+    description: "Protection of Information at Rest"
+    notes: "RAM disk = data in use (not at rest per SP 800-53 Rev 5). Swap covered by FDE."
+    code_targets:
+      - path: "aegis-vscode-remote/launcher/aegis-secure-launch.sh"
+        detail: "Ephemeral RAM disk; destroyed on exit"
+      - path: "aegis-vscode-remote/extension/src/auth.ts"
+        detail: "In-memory token storage in secure mode; clearAllSecrets on deactivate"
+      - path: "aegis-vscode-remote/extension/src/secure-mode.ts"
+        detail: "isSecureMode() detection gates all ephemeral behaviors"

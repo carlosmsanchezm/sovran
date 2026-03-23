@@ -83,6 +83,30 @@ If commands are not found or cause errors:
 - Check Developer Tools Console (Help → Toggle Developer Tools) for activation errors
 - View extension logs: `Cmd+Shift+P` → "Aegis: Show Logs"
 
+If Keycloak shows `Restart login cookie not found` during extension sign-in:
+- This is usually browser cookie policy blocking the OAuth flow launched from VS Code.
+- Allow cookies for `https://keycloak.localtest.me` (or your Keycloak host) and retry `Aegis: Sign In`.
+- Local fallback (no browser flow): launch VS Code with env credentials so the extension can request tokens directly:
+  - `AEGIS_TEST_USERNAME=<email>`
+  - `AEGIS_TEST_PASSWORD=<password>`
+
+## Secure Mode
+
+For environments handling CUI (Controlled Unclassified Information), the extension supports a
+**Secure Mode** activated by the `AEGIS_SECURE_LAUNCH=1` environment variable.
+
+When active:
+- Tokens are stored in-memory only (not persisted to VS Code SecretStorage)
+- `offline_access` scope is stripped (no refresh tokens)
+- `security.rejectUnauthorized` is forced to `true` regardless of settings
+- `logLevel` is clamped to `info` (no debug/trace output)
+- URLs and settings are redacted in log output
+- The automation session flow (password grant via env vars) is disabled
+- All secrets are wiped from SecretStorage on extension deactivate
+
+Use the Secure Launcher scripts in `launcher/` to automatically set this env var and run
+VS Code inside a RAM-disk sandbox. See `docs/secure-mode.md` for the full reference.
+
 ## Keycloak Client Configuration
 
 Create (or update) a public client for the extension with:
@@ -91,6 +115,7 @@ Create (or update) a public client for the extension with:
 - **Web origins:** `vscode://aegis.aegis-remote` (optional for Keycloak ≥18)
 - **Grant type:** Authorization Code with PKCE
 - **Client authentication:** Disabled (public client)
+- **Direct access grants:** Enabled (recommended for local dev fallback only)
 
 The extension requests the `openid profile email offline_access` scopes by default so that it can derive the authenticated identity from token claims and refresh access tokens silently.
 

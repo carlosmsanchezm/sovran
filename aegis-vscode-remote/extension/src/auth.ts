@@ -6,6 +6,8 @@ import * as vscode from 'vscode';
 import { getSettings } from './config';
 import { getHttpDispatcher } from './http';
 import { withRetry } from './errors';
+import { out } from './ui';
+import { isSecureMode } from './secure-mode';
 
 const AUTH_PROVIDER_ID = 'aegis';
 const AUTH_PROVIDER_LABEL = 'Aegis Platform';
@@ -50,35 +52,54 @@ const sessionMetadata = new Map<string, { userHeader?: string }>();
 let automationSessionCache: vscode.AuthenticationSession | undefined;
 
 async function automationSessionFromEnv(): Promise<vscode.AuthenticationSession | undefined> {
+  if (isSecureMode()) {
+    out.appendLine('[auth] automationSessionFromEnv disabled in secure mode');
+    return undefined;
+  }
+
   if (automationSessionCache) {
+    out.appendLine(`[auth] returning cached automation session for ${automationSessionCache.account.label}`);
     return automationSessionCache;
   }
 
   const username = process.env.AEGIS_TEST_USERNAME?.trim();
   const password = process.env.AEGIS_TEST_PASSWORD ?? '';
+  out.appendLine(`[auth] automationSessionFromEnv: username=${username ? username : '(not set)'}, password=${password ? '***' : '(not set)'}`);
   const sessionFromFile = await loadSessionFromWorkspaceFile();
   if (sessionFromFile) {
     const { token, email } = sessionFromFile;
     const claims = parseJwt(token);
-    const { account, userHeader } = deriveAccountInfo(claims, email);
-    const session: vscode.AuthenticationSession = {
-      id: SESSION_ID,
-      accessToken: token,
-      account,
-      scopes: ['platform'],
-    };
-    sessionMetadata.set(SESSION_ID, { userHeader });
-    automationSessionCache = session;
-    return session;
+    const exp = typeof claims?.exp === 'number' ? claims.exp : 0;
+    if (exp > 0 && exp * 1000 < Date.now()) {
+      out.appendLine(`[auth] workspace file token expired (exp=${new Date(exp * 1000).toISOString()}), skipping`);
+    } else {
+      out.appendLine(`[auth] found session from workspace file (token ${token.length} chars)`);
+      const { account, userHeader } = deriveAccountInfo(claims, email);
+      const session: vscode.AuthenticationSession = {
+        id: SESSION_ID,
+        accessToken: token,
+        account,
+        scopes: ['platform'],
+      };
+      sessionMetadata.set(SESSION_ID, { userHeader });
+      automationSessionCache = session;
+      return session;
+    }
   }
 
   if (!username || !password) {
     return undefined;
   }
 
-  const authority = (process.env.AEGIS_AUTH_AUTHORITY ?? 'https://keycloak.localtest.me/realms/aegis').trim().replace(/\/+$/u, '');
-  const clientId = process.env.AEGIS_AUTH_CLIENT_ID?.trim() || 'vscode-extension';
-  const audience = process.env.AEGIS_PLATFORM_AUTH_SCOPE?.trim() || process.env.AEGIS_AUTH_SCOPE?.trim();
+  const settings = getSettings();
+  const authority = (process.env.AEGIS_AUTH_AUTHORITY ?? (settings.auth.authority || '')).trim().replace(/\/+$/u, '');
+  if (!authority) {
+    throw new Error(
+      'No auth authority configured. Set "aegisRemote.auth.authority" in VS Code settings or AEGIS_AUTH_AUTHORITY environment variable.'
+    );
+  }
+  const clientId = process.env.AEGIS_AUTH_CLIENT_ID?.trim() || settings.auth.clientId || 'vscode-extension';
+  const audience = process.env.AEGIS_PLATFORM_AUTH_SCOPE?.trim() || process.env.AEGIS_AUTH_SCOPE?.trim() || settings.platform.authScope || undefined;
 
   const body = new URLSearchParams();
   body.set('grant_type', 'password');
@@ -102,21 +123,34 @@ async function automationSessionFromEnv(): Promise<vscode.AuthenticationSession 
   body.set('scope', scope);
 
   const tokenUrl = `${authority}/protocol/openid-connect/token`;
-  const response = await fetch(tokenUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
-  });
+  out.appendLine(`[auth] automated login: fetching token from ${tokenUrl} as ${username}`);
+  const dispatcher = getHttpDispatcher();
+  let response: Response;
+  try {
+    response = await globalThis.fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+      ...(dispatcher ? { dispatcher } : {}),
+    } as RequestInit);
+  } catch (fetchErr) {
+    out.appendLine(`[auth] automated login fetch error: ${fetchErr}`);
+    throw fetchErr;
+  }
 
   if (!response.ok) {
+    const errorBody = await response.text().catch(() => '');
+    out.appendLine(`[auth] automated login failed: ${response.status} ${response.statusText} body=${errorBody}`);
     throw new Error(`Automated Keycloak login failed (${response.status} ${response.statusText}).`);
   }
 
   const tokenResponse = (await response.json()) as TokenResponse;
   const accessToken = tokenResponse.access_token?.trim();
   if (!accessToken) {
+    out.appendLine('[auth] automated login: no access_token in response');
     throw new Error('Automated Keycloak login did not return an access token.');
   }
+  out.appendLine(`[auth] automated login: got access_token (${accessToken.length} chars)`);
   const claims = parseJwt(tokenResponse.id_token ?? accessToken);
   const { account, userHeader } = deriveAccountInfo(claims, username);
 
@@ -278,11 +312,25 @@ class AegisAuthenticationProvider implements vscode.AuthenticationProvider, vsco
       return this.persisted;
     }
 
+    if (isSecureMode()) {
+      // In secure mode, only use in-memory sessions — do not read from SecretStorage
+      return undefined;
+    }
+
     const raw = await this.context.secrets.get(SECRET_SESSION_KEY);
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as PersistedSession;
         if (parsed && typeof parsed.accessToken === 'string') {
+          // Validate that the persisted token was issued by the currently configured authority
+          const claims = parseJwt(parsed.accessToken);
+          const { auth } = getSettings();
+          const configuredIssuer = auth.authority?.replace(/\/+$/u, '');
+          if (claims?.iss && configuredIssuer && claims.iss !== configuredIssuer) {
+            console.warn('[auth] persisted token issuer mismatch — clearing stale session');
+            await this.context.secrets.delete(SECRET_SESSION_KEY);
+            return undefined;
+          }
           this.persisted = parsed;
           recordMetadata(parsed);
           return parsed;
@@ -308,6 +356,10 @@ class AegisAuthenticationProvider implements vscode.AuthenticationProvider, vsco
   private async storePersisted(session: PersistedSession) {
     this.persisted = session;
     recordMetadata(session);
+    if (isSecureMode()) {
+      // In secure mode, keep tokens in-memory only — do not persist to SecretStorage
+      return;
+    }
     await this.context.secrets.store(SECRET_SESSION_KEY, JSON.stringify(session));
     await this.context.secrets.delete(LEGACY_SECRET_TOKEN_KEY);
     await this.context.secrets.delete(LEGACY_SECRET_SUBJECT_KEY);
@@ -390,7 +442,12 @@ class AegisAuthenticationProvider implements vscode.AuthenticationProvider, vsco
       throw new Error('Configure "aegisRemote.auth.authority" and "aegisRemote.auth.clientId" before signing in.');
     }
 
-    const scope = buildScope(scopes, auth.scopes, platform?.authScope);
+    let filteredScopes = scopes;
+    if (isSecureMode()) {
+      filteredScopes = scopes.filter((s) => s !== 'offline_access');
+    }
+
+    const scope = buildScope(filteredScopes, auth.scopes, platform?.authScope);
     const { verifier, challenge } = createPkcePair();
     const state = toBase64Url(crypto.randomBytes(18));
     const authUrl = new URL(`${auth.authority.replace(/\/+$/u, '')}/protocol/openid-connect/auth`);
@@ -408,7 +465,11 @@ class AegisAuthenticationProvider implements vscode.AuthenticationProvider, vsco
     const pendingPromise = new Promise<PersistedSession>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending = undefined;
-        reject(new vscode.CancellationError());
+        reject(
+          new Error(
+            'OAuth login timed out waiting for callback. If Keycloak showed "Restart login cookie not found", allow cookies for your Keycloak host or sign in with AEGIS_TEST_USERNAME/AEGIS_TEST_PASSWORD env vars.'
+          )
+        );
       }, LOGIN_TIMEOUT_MS);
       this.pending = { state, codeVerifier: verifier, scope, resolve, reject, timeout };
     });
@@ -557,7 +618,7 @@ class AegisAuthenticationProvider implements vscode.AuthenticationProvider, vsco
     return {
       version: 1,
       accessToken: tokenResponse.access_token,
-      refreshToken: tokenResponse.refresh_token,
+      refreshToken: isSecureMode() ? undefined : tokenResponse.refresh_token,
       idToken: tokenResponse.id_token,
       expiresAt,
       scope: tokenResponse.scope ?? scope,
@@ -584,6 +645,34 @@ export async function initializeAuth(context: vscode.ExtensionContext) {
 }
 
 export async function requireSession(createIfNone = true): Promise<vscode.AuthenticationSession | undefined> {
+  // In dev/test mode, prioritize password grant over potentially stale persisted sessions
+  if (process.env.AEGIS_TEST_USERNAME && createIfNone) {
+    const automated = await automationSessionFromEnv();
+    if (automated) {
+      return automated;
+    }
+  }
+
+  let existing: vscode.AuthenticationSession | undefined;
+  try {
+    existing = await vscode.authentication.getSession(AUTH_PROVIDER_ID, ['platform'], {
+      createIfNone: false,
+      silent: true,
+    });
+  } catch {
+    existing = undefined;
+  }
+  if (existing) {
+    return existing;
+  }
+
+  if (createIfNone && !process.env.AEGIS_TEST_USERNAME) {
+    const automated = await automationSessionFromEnv();
+    if (automated) {
+      return automated;
+    }
+  }
+
   try {
     return await vscode.authentication.getSession(AUTH_PROVIDER_ID, ['platform'], { createIfNone });
   } catch (err) {
@@ -606,6 +695,7 @@ export async function requireSession(createIfNone = true): Promise<vscode.Authen
 }
 
 export async function signOut() {
+  automationSessionCache = undefined;
   if (providerInstance) {
     await providerInstance.clearSession();
   }
@@ -626,4 +716,16 @@ export function getSessionUser(session: vscode.AuthenticationSession): string | 
   const claims = parseJwt(session.accessToken);
   const { userHeader } = deriveAccountInfo(claims);
   return userHeader;
+}
+
+/**
+ * Delete all known secret keys from VS Code SecretStorage.
+ * Called during deactivate() in secure mode to ensure no tokens persist on disk.
+ */
+export async function clearAllSecrets(context: vscode.ExtensionContext): Promise<void> {
+  await context.secrets.delete(SECRET_SESSION_KEY);
+  await context.secrets.delete(LEGACY_SECRET_TOKEN_KEY);
+  await context.secrets.delete(LEGACY_SECRET_SUBJECT_KEY);
+  automationSessionCache = undefined;
+  out.appendLine('[auth] all secrets cleared');
 }

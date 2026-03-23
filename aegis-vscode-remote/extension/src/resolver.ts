@@ -8,6 +8,7 @@ import { getSettings } from './config';
 import { ConnectionManager } from './connection';
 import { issueProxyTicket, renewConnectionSession, revokeConnectionSession, getCurrentSessionId, clearCurrentSessionId } from './platform';
 import { categorizeConnectionError } from './errors';
+import { redactUrl } from './secure-mode';
 
 let lastConnection: ConnectionManager | undefined;
 let lastEnd: (() => void) | undefined;
@@ -53,7 +54,7 @@ export const AegisResolver: vscode.RemoteAuthorityResolver = {
         // Get a fresh ticket for each connection attempt (tokens are one-time use)
         const ticket = await issueProxyTicket(wid);
         const url = buildWebSocketUrl(ticket.proxyUrl, wid);
-        out.appendLine(`[resolver] got ticket for ${wid}, url=${url}`);
+        out.appendLine(`[resolver] got ticket for ${wid}, url=${redactUrl(url)}`);
 
         const caBuffers: Buffer[] = [];
         if (ticket.caPem) {
@@ -87,13 +88,13 @@ export const AegisResolver: vscode.RemoteAuthorityResolver = {
         lastConnection = connection;
 
         const transport = await connection.open();
-        status.set(`$(plug) Aegis: Connected ${widLabel}`, url);
+        status.set(`$(plug) Aegis: Connected ${widLabel}`, redactUrl(url));
 
         transport.onDidClose((closeErr) => {
           const closeInfo = connection.lastCloseInfo;
           if (closeInfo) {
             // Update status bar with disconnect reason (Task #23)
-            status.set(`$(debug-disconnect) Aegis: ${closeInfo.userMessage}`, url);
+            status.set(`$(debug-disconnect) Aegis: ${closeInfo.userMessage}`, redactUrl(url));
             if (closeInfo.isAbnormal) {
               // Offer a "Reconnect" action button for abnormal closures
               vscode.window.showWarningMessage(
@@ -112,13 +113,13 @@ export const AegisResolver: vscode.RemoteAuthorityResolver = {
               vscode.window.showInformationMessage(closeInfo.userMessage);
             }
           } else {
-            status.set(`$(debug-disconnect) Aegis: Disconnected ${widLabel}`, url);
+            status.set(`$(debug-disconnect) Aegis: Disconnected ${widLabel}`, redactUrl(url));
           }
         });
         transport.onDidEnd(() => {
           const closeInfo = connection.lastCloseInfo;
           if (!closeInfo) {
-            status.set(`$(debug-disconnect) Aegis: Disconnected ${widLabel}`, url);
+            status.set(`$(debug-disconnect) Aegis: Disconnected ${widLabel}`, redactUrl(url));
           }
         });
         lastEnd = () => transport.end();

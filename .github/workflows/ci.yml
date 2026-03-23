@@ -21,6 +21,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  chart-drift:
+    name: Chart drift detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout sovran
+        uses: actions/checkout@v4
+        with:
+          path: sovran
+
+      - name: Checkout aegis-platform
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/aegis-platform
+          path: aegis-platform
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check chart template sync
+        working-directory: sovran
+        run: make check-charts
+
   test:
     name: Tests on ${{ matrix.os }} (Node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}

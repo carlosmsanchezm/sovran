@@ -29,8 +29,17 @@ export function categorizeConnectionError(err: unknown): CategorizedError {
   if (msg.includes('ETIMEDOUT') || msg.includes('ECONNRESET')) {
     return { message: 'Connection timed out. The proxy may be temporarily unavailable.', category: 'network' };
   }
-  if (msg.includes('certificate') || msg.includes('TLS') || msg.includes('SSL')) {
-    return { message: 'TLS certificate error. Check your CA certificate configuration.', category: 'network' };
+  if (msg.includes('certificate') || msg.includes('TLS') || msg.includes('SSL') || msg.includes('ERR_TLS')) {
+    if (msg.includes('CERT_ALTNAME_INVALID') || msg.includes('hostname') || msg.includes('altnames')) {
+      return { message: `TLS hostname mismatch: the server certificate doesn't match the URL. ${msg}`, category: 'network' };
+    }
+    if (msg.includes('CERT_HAS_EXPIRED') || msg.includes('expired')) {
+      return { message: `TLS certificate has expired. Check certificate renewal. ${msg}`, category: 'network' };
+    }
+    if (msg.includes('UNABLE_TO_VERIFY') || msg.includes('self signed') || msg.includes('unable to get issuer')) {
+      return { message: `TLS CA trust error: certificate not trusted. Check aegisRemote.security.caPath. ${msg}`, category: 'network' };
+    }
+    return { message: `TLS error: ${msg}`, category: 'network' };
   }
 
   // --- Authentication / authorization ---
