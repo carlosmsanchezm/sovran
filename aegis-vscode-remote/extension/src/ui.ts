@@ -117,7 +117,7 @@ class WorkspaceTreeItem extends vscode.TreeItem {
         this.command = {
           command: 'aegis.connect',
           title: 'Connect',
-          arguments: [workspace.id],
+          arguments: [workspace.id, workspace.workspaceRoot],
         };
       }
     }

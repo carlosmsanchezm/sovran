@@ -1,26 +1,16 @@
-# Exclude everything by default
-*
-
-# Re-include the pieces the VSIX actually needs
-!.vscodeignore
-!README.md
-!package.json
-!out/**
-!proto/**
-!src/**
-!images/**
-!node_modules/**
-
-# Keep build/test artifacts out of the package
-coverage/**
-test-results/**
-out-e2e/**
+# Exclude dev/build artifacts
+.vscode/**
+.vscode-test/**
+src/**
 __tests__/**
 __mocks__/**
 scripts/**
-.vscode/**
-.vscode-test/**
+coverage/**
+test-results/**
+out-e2e/**
+node_modules/**
 *.vsix
 tsconfig.json
 tsconfig.e2e.json
 jest.config.js
+.gitignore

@@ -25,6 +25,7 @@ type Settings = {
   idleTimeoutMs: number;
   security: Security;
   logLevel: LogLevel;
+  isSecureMode: boolean;
 };
 
 const baseSettings = (): Settings => ({
@@ -50,6 +51,7 @@ const baseSettings = (): Settings => ({
     caPath: '',
   },
   logLevel: 'info',
+  isSecureMode: false,
 });
 
 const STORE_KEY = '__aegis_config_stub_store__';

@@ -193,7 +193,10 @@ let readFileSpy: jest.SpiedFunction<typeof fs.readFile>;
 
     const session = await auth.requireSession(true);
 
-    expect(vscode.authentication.getSession).toHaveBeenCalledWith('aegis', ['platform'], { createIfNone: true });
+    expect(vscode.authentication.getSession).toHaveBeenCalledWith('aegis', ['platform'], {
+      createIfNone: false,
+      silent: true,
+    });
     expect(session).toBe(mockSession);
   });
 
@@ -213,12 +216,15 @@ let readFileSpy: jest.SpiedFunction<typeof fs.readFile>;
 
     const session = await auth.requireSession(true);
 
-    expect(getSessionMock).toHaveBeenNthCalledWith(1, 'aegis', ['platform'], { createIfNone: true });
-    expect(getSessionMock).toHaveBeenNthCalledWith(2, 'aegis', ['platform'], { createIfNone: false, silent: true });
+    expect(getSessionMock).toHaveBeenNthCalledWith(1, 'aegis', ['platform'], {
+      createIfNone: false,
+      silent: true,
+    });
+    expect(getSessionMock).toHaveBeenNthCalledWith(2, 'aegis', ['platform'], { createIfNone: true });
     expect(session).toBe(mockSession);
   });
 
-  test('requireSession falls back to automation credentials when dialogs are suppressed', async () => {
+  test('requireSession prioritizes automation credentials when AEGIS_TEST_USERNAME is set', async () => {
     const originalFetch = globalThis.fetch;
     const username = 'automation@example.com';
     const password = 'secret';
@@ -238,16 +244,13 @@ let readFileSpy: jest.SpiedFunction<typeof fs.readFile>;
     globalThis.fetch = mockFetch;
 
     const getSessionMock = vscode.authentication.getSession as jest.MockedFunction<typeof vscode.authentication.getSession>;
-    getSessionMock.mockImplementationOnce(async () => {
-      throw new Error('DialogService: refused to show dialog in tests.');
-    });
-    getSessionMock.mockResolvedValueOnce(undefined);
 
     try {
       const session = await auth.requireSession(true);
 
-      expect(getSessionMock).toHaveBeenNthCalledWith(1, 'aegis', ['platform'], { createIfNone: true });
-      expect(getSessionMock).toHaveBeenNthCalledWith(2, 'aegis', ['platform'], { createIfNone: false, silent: true });
+      // When AEGIS_TEST_USERNAME is set, automation credentials are used directly
+      // without calling vscode.authentication.getSession at all.
+      expect(getSessionMock).not.toHaveBeenCalled();
       expect(mockFetch).toHaveBeenCalledTimes(1);
       expect(session?.accessToken).toBe(accessToken);
       expect(session?.account.label).toBe(username);
@@ -270,8 +273,11 @@ let readFileSpy: jest.SpiedFunction<typeof fs.readFile>;
 
     const session = await auth.requireSession(true);
 
-    expect(getSessionMock).toHaveBeenNthCalledWith(1, 'aegis', ['platform'], { createIfNone: true });
-    expect(getSessionMock).toHaveBeenNthCalledWith(2, 'aegis', ['platform'], { createIfNone: false, silent: true });
+    expect(getSessionMock).toHaveBeenNthCalledWith(1, 'aegis', ['platform'], {
+      createIfNone: false,
+      silent: true,
+    });
+    expect(getSessionMock).toHaveBeenCalledTimes(1);
     expect(readFileSpy).toHaveBeenCalled();
     expect(session?.accessToken).toBe(workspaceToken);
     expect(session?.account.label).toBe('workspace@example.com');
@@ -386,7 +392,7 @@ let readFileSpy: jest.SpiedFunction<typeof fs.readFile>;
       })
     );
 
-    fetchMock.mockResolvedValueOnce(new Response('bad', { status: 400 }));
+    fetchMock.mockImplementation(async () => new Response('bad', { status: 400 }));
 
     await expect(provider.getSessions(['platform'], {})).rejects.toThrow(/token refresh failed/i);
     expect(await ctx.secrets.get(SECRET_KEY)).toBeUndefined();

@@ -6,7 +6,9 @@ import { promises as fs } from 'fs';
 import { out, status } from './ui';
 import { getSettings } from './config';
 import { ConnectionManager } from './connection';
-import { issueProxyTicket } from './platform';
+import { issueProxyTicket, renewConnectionSession, revokeConnectionSession, getCurrentSessionId, clearCurrentSessionId } from './platform';
+import { categorizeConnectionError } from './errors';
+import { redactUrl } from './secure-mode';
 
 let lastConnection: ConnectionManager | undefined;
 let lastEnd: (() => void) | undefined;
@@ -24,6 +26,8 @@ export function forceReconnect() {
       lastEnd = undefined;
     }
   }
+  // Best-effort revocation of the previous session (fire-and-forget)
+  void revokeCurrentSession();
 }
 
 export const AegisResolver: vscode.RemoteAuthorityResolver = {
@@ -50,7 +54,7 @@ export const AegisResolver: vscode.RemoteAuthorityResolver = {
         // Get a fresh ticket for each connection attempt (tokens are one-time use)
         const ticket = await issueProxyTicket(wid);
         const url = buildWebSocketUrl(ticket.proxyUrl, wid);
-        out.appendLine(`[resolver] got ticket for ${wid}, url=${url}`);
+        out.appendLine(`[resolver] got ticket for ${wid}, url=${redactUrl(url)}`);
 
         const caBuffers: Buffer[] = [];
         if (ticket.caPem) {
@@ -84,9 +88,40 @@ export const AegisResolver: vscode.RemoteAuthorityResolver = {
         lastConnection = connection;
 
         const transport = await connection.open();
-        status.set(`$(plug) Aegis: Connected ${widLabel}`, url);
-        transport.onDidClose(() => status.set(`$(debug-disconnect) Aegis: Disconnected ${widLabel}`, url));
-        transport.onDidEnd(() => status.set(`$(debug-disconnect) Aegis: Disconnected ${widLabel}`, url));
+        status.set(`$(plug) Aegis: Connected ${widLabel}`, redactUrl(url));
+
+        transport.onDidClose((closeErr) => {
+          const closeInfo = connection.lastCloseInfo;
+          if (closeInfo) {
+            // Update status bar with disconnect reason (Task #23)
+            status.set(`$(debug-disconnect) Aegis: ${closeInfo.userMessage}`, redactUrl(url));
+            if (closeInfo.isAbnormal) {
+              // Offer a "Reconnect" action button for abnormal closures
+              vscode.window.showWarningMessage(
+                closeInfo.userMessage,
+                'Reconnect',
+                'Show Logs',
+              ).then(selection => {
+                if (selection === 'Reconnect') {
+                  vscode.commands.executeCommand('aegis.reconnect');
+                } else if (selection === 'Show Logs') {
+                  vscode.commands.executeCommand('aegis.showLogs');
+                }
+              });
+            } else {
+              // Normal close (code 1000)
+              vscode.window.showInformationMessage(closeInfo.userMessage);
+            }
+          } else {
+            status.set(`$(debug-disconnect) Aegis: Disconnected ${widLabel}`, redactUrl(url));
+          }
+        });
+        transport.onDidEnd(() => {
+          const closeInfo = connection.lastCloseInfo;
+          if (!closeInfo) {
+            status.set(`$(debug-disconnect) Aegis: Disconnected ${widLabel}`, redactUrl(url));
+          }
+        });
         lastEnd = () => transport.end();
         transport.onDidEnd(() => {
           if (lastEnd === transport.end) {
@@ -98,11 +133,7 @@ export const AegisResolver: vscode.RemoteAuthorityResolver = {
           }
         });
         if (ticket.ttlSeconds > 0) {
-          const renewMs = Math.max(5_000, Math.floor(ticket.ttlSeconds * 1000 * 0.85));
-          renewalTimer = setTimeout(() => {
-            out.appendLine(`[resolver] renewing ticket for workspace ${wid}`);
-            forceReconnect();
-          }, renewMs);
+          scheduleRenewal(ticket.ttlSeconds, wid);
         }
         return transport;
       } catch (err) {
@@ -111,7 +142,37 @@ export const AegisResolver: vscode.RemoteAuthorityResolver = {
         if (err instanceof Error && err.stack) {
           out.appendLine(`[resolver] stack: ${err.stack}`);
         }
-        status.set(`$(warning) Aegis: Connection failed ${widLabel}`, errMsg);
+
+        // Categorize the error for user-facing messaging (Task #21)
+        const categorized = categorizeConnectionError(err);
+        out.appendLine(`[resolver] error category=${categorized.category}: ${categorized.message}`);
+        status.set(`$(warning) Aegis: Connection failed ${widLabel}`, categorized.message);
+
+        // Show categorized error to the user with appropriate actions
+        if (categorized.category === 'auth') {
+          vscode.window.showErrorMessage(categorized.message, 'Sign Out & Re-authenticate').then(selection => {
+            if (selection === 'Sign Out & Re-authenticate') {
+              vscode.commands.executeCommand('aegis.signOut').then(() => {
+                vscode.commands.executeCommand('aegis.signIn');
+              });
+            }
+          });
+        } else if (categorized.category === 'network') {
+          vscode.window.showErrorMessage(categorized.message, 'Show Logs', 'Open Settings').then(selection => {
+            if (selection === 'Show Logs') {
+              vscode.commands.executeCommand('aegis.showLogs');
+            } else if (selection === 'Open Settings') {
+              vscode.commands.executeCommand('workbench.action.openSettings', 'aegisRemote');
+            }
+          });
+        } else {
+          vscode.window.showErrorMessage(categorized.message, 'Show Logs').then(selection => {
+            if (selection === 'Show Logs') {
+              vscode.commands.executeCommand('aegis.showLogs');
+            }
+          });
+        }
+
         throw err;
       }
     }, 'hello');
@@ -122,6 +183,54 @@ export const AegisResolver: vscode.RemoteAuthorityResolver = {
     };
   }
 };
+
+function scheduleRenewal(ttlSeconds: number, wid: string) {
+  if (renewalTimer) {
+    clearTimeout(renewalTimer);
+    renewalTimer = undefined;
+  }
+  const renewMs = Math.max(5_000, Math.floor(ttlSeconds * 1000 * 0.85));
+  out.appendLine(`[resolver] scheduling session renewal in ${Math.round(renewMs / 1000)}s for workspace ${wid}`);
+
+  renewalTimer = setTimeout(async () => {
+    const sessionId = getCurrentSessionId();
+    if (!sessionId) {
+      out.appendLine('[resolver] no session_id available, falling back to force reconnect');
+      forceReconnect();
+      return;
+    }
+
+    try {
+      out.appendLine(`[resolver] renewing session ${sessionId} for workspace ${wid}`);
+      const renewed = await renewConnectionSession(sessionId);
+      out.appendLine(`[resolver] session renewed, new ttl=${renewed.ttlSeconds}s`);
+
+      // Schedule the next renewal based on the new TTL
+      if (renewed.ttlSeconds > 0) {
+        scheduleRenewal(renewed.ttlSeconds, wid);
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      out.appendLine(`[resolver] session renewal failed (${errMsg}), falling back to force reconnect`);
+      forceReconnect();
+    }
+  }, renewMs);
+}
+
+/** Best-effort revocation of the current connection session. */
+export async function revokeCurrentSession(): Promise<void> {
+  const sessionId = getCurrentSessionId();
+  if (!sessionId) {
+    return;
+  }
+  try {
+    await revokeConnectionSession(sessionId);
+  } catch (err) {
+    out.appendLine(`[resolver] revokeCurrentSession error (ignored): ${String(err)}`);
+  } finally {
+    clearCurrentSessionId();
+  }
+}
 
 function buildWebSocketUrl(rawProxyUrl: string, wid: string): string {
   if (!rawProxyUrl) {

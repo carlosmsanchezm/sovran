@@ -114,3 +114,15 @@ managed preview realm.
 When chasing CI failures, download the workflow artifacts (particularly the extension job log) and
 grep for `[real-e2e]` lines to confirm the port-forward, Keycloak login, and proxy ticket steps all
 completed successfully.
+
+## Secure Mode (CUI Environments)
+
+When handling CUI (Controlled Unclassified Information), the extension supports a **Secure Mode**
+activated by setting `AEGIS_SECURE_LAUNCH=1`. This enforces ephemeral token storage, TLS
+verification, log redaction, and disables the automation credential flow.
+
+See [docs/secure-mode.md](secure-mode.md) for the full reference including a behavior comparison
+table between normal and secure mode.
+
+The Secure Launcher scripts in `aegis-vscode-remote/launcher/` automate RAM-disk creation, FDE
+verification, and VS Code configuration for CUI-handling sessions.
