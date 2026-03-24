@@ -24,6 +24,8 @@
     "jws": "^4.0.0",
     "glob": "^11.1.0",
     "js-yaml": "^4.1.1",
-    "test-exclude": "^7.0.1"
+    "test-exclude": "^7.0.1",
+    "serialize-javascript": "^7.0.3",
+    "minimatch": "^10.2.3"
   }
 }
