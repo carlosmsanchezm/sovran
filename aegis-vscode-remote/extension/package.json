@@ -203,7 +203,7 @@
   "dependencies": {
     "@grpc/grpc-js": "^1.10.6",
     "@grpc/proto-loader": "^0.7.13",
-    "ws": "^8.17.0"
+    "ws": "^8.20.1"
   },
   "devDependencies": {
     "@types/glob": "^8.1.0",
