@@ -11,7 +11,7 @@
     "start:test": "npm run build && npm run gen-cert && node dist/server.js"
   },
   "dependencies": {
-    "ws": "^8.17.0"
+    "ws": "^8.20.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
